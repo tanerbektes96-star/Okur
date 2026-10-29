@@ -1,0 +1,20 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Açık kitap -->
+    <path
+        android:fillColor="#FFF8F1E7"
+        android:pathData="M54,40 C47,35 38,34 30,35 L30,72 C38,71 47,72 54,77 Z" />
+    <path
+        android:fillColor="#FFEFE2CF"
+        android:pathData="M54,40 C61,35 70,34 78,35 L78,72 C70,71 61,72 54,77 Z" />
+    <path
+        android:fillColor="#FFE0A458"
+        android:pathData="M64,35.5 L64,50 L68,47 L72,50 L72,35 C69,35 66.5,35.2 64,35.5 Z" />
+    <path
+        android:strokeColor="#FF8C4A2F"
+        android:strokeWidth="1.2"
+        android:pathData="M35,44 L48,46 M35,50 L48,52 M35,56 L48,58 M60,46 L73,44 M60,52 L73,50 M60,58 L73,56" />
+</vector>
