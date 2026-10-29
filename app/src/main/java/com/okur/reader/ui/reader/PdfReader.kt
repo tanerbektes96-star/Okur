@@ -324,7 +324,7 @@ fun PdfReader(
                                         if (offset > 0f) {
                                             transformOrigin = TransformOrigin(0f, 0.5f)
                                             rotationY = 90f * offset
-                                            cameraDistance = 14f * density
+                                            cameraDistance = 14f * this.density
                                         }
                                     }
                                 }
