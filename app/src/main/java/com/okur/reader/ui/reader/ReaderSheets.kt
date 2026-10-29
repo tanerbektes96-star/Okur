@@ -2,6 +2,7 @@
 
 package com.okur.reader.ui.reader
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
@@ -42,6 +43,8 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FormatAlignJustify
 import androidx.compose.material.icons.filled.FormatLineSpacing
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelfImprovement
 import androidx.compose.material.icons.filled.Add
@@ -49,6 +52,7 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -97,7 +101,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.okur.reader.data.EyePrefs
 import com.okur.reader.data.FontChoice
+import com.okur.reader.data.FilterMode
 import com.okur.reader.data.PageMode
+import com.okur.reader.data.PageTurn
+import com.okur.reader.tts.TtsVoice
 import com.okur.reader.data.ReaderPrefs
 import com.okur.reader.data.ReaderTheme
 import com.okur.reader.data.db.BookmarkEntity
@@ -115,6 +122,8 @@ fun AppearanceSheet(
     isPdf: Boolean,
     onPrefs: ((ReaderPrefs) -> ReaderPrefs) -> Unit,
     onEye: ((EyePrefs) -> EyePrefs) -> Unit,
+    voices: List<TtsVoice>,
+    onPreviewVoice: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
@@ -151,22 +160,27 @@ fun AppearanceSheet(
                 )
             }
 
-            // Hızlı göz koruma
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Filled.SelfImprovement, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
+            // Hızlı göz koruma: başlık üstte, kaydırıcı ve anahtar aynı satırda ortalı
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.SelfImprovement, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.width(12.dp))
                     Text("Mavi ışık filtresi", style = MaterialTheme.typography.bodyMedium)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Spacer(Modifier.width(36.dp))
                     Slider(
                         value = eye.filterStrength,
-                        onValueChange = { v -> onEye { it.copy(filterStrength = v, filterMode = if (it.filterMode == com.okur.reader.data.FilterMode.OFF) com.okur.reader.data.FilterMode.ON else it.filterMode) } },
+                        onValueChange = { v -> onEye { it.copy(filterStrength = v, filterMode = if (it.filterMode == FilterMode.OFF) FilterMode.ON else it.filterMode) } },
                         valueRange = 0f..0.8f,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Switch(
+                        checked = eye.filterMode != FilterMode.OFF,
+                        onCheckedChange = { on -> onEye { it.copy(filterMode = if (on) FilterMode.ON else FilterMode.OFF) } },
                     )
                 }
-                Switch(
-                    checked = eye.filterMode != com.okur.reader.data.FilterMode.OFF,
-                    onCheckedChange = { on -> onEye { it.copy(filterMode = if (on) com.okur.reader.data.FilterMode.ON else com.okur.reader.data.FilterMode.OFF) } },
-                )
             }
 
             HorizontalDivider()
@@ -238,8 +252,79 @@ fun AppearanceSheet(
                     ) { Text(m.label) }
                 }
             }
+            AnimatedVisibility(mode == PageMode.PAGED) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Sayfa çevirme animasyonu", style = MaterialTheme.typography.bodyMedium)
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        PageTurn.entries.forEachIndexed { i, t ->
+                            SegmentedButton(
+                                selected = prefs.pageTurn == t,
+                                onClick = { onPrefs { it.copy(pageTurn = t) } },
+                                shape = SegmentedButtonDefaults.itemShape(i, PageTurn.entries.size),
+                            ) { Text(t.label) }
+                        }
+                    }
+                }
+            }
             SwitchRow(if (isPdf) "Tablette yatayda çift sayfa" else "Geniş ekranda çift sütun", prefs.dualPage) { v -> onPrefs { it.copy(dualPage = v) } }
+            SwitchRow("Kenarlara dokunarak sayfa çevir", prefs.tapZones) { v -> onPrefs { it.copy(tapZones = v) } }
             if (isPdf) SwitchRow("PDF renklerini temaya uyarla (gece modu)", prefs.pdfFollowTheme) { v -> onPrefs { it.copy(pdfFollowTheme = v) } }
+
+            if (!isPdf) {
+                HorizontalDivider()
+                SectionTitle("Sesli okuma")
+                Text("Ses tonu", style = MaterialTheme.typography.bodyMedium)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("Bariton (kalın)" to 0.72f, "Normal" to 1f, "İnce" to 1.25f).forEach { (label, value) ->
+                        FilterChip(
+                            selected = kotlin.math.abs(prefs.ttsPitch - value) < 0.04f,
+                            onClick = { onPrefs { it.copy(ttsPitch = value) } },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                LabeledSlider(
+                    icon = { Icon(Icons.Filled.RecordVoiceOver, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                    label = "Ton ayarı",
+                    valueText = String.format(Locale.US, "%.2f", prefs.ttsPitch),
+                    value = prefs.ttsPitch,
+                    range = 0.5f..1.6f,
+                    onChange = { v -> onPrefs { it.copy(ttsPitch = (v * 20).roundToInt() / 20f) } },
+                )
+                Text("Ses", style = MaterialTheme.typography.bodyMedium)
+                if (voices.isEmpty()) {
+                    Text(
+                        "Bu dil için ek ses bulunamadı. Android Ayarlar → Metin okuma (TTS) bölümünden Google ses verilerini indirerek erkek sesleri ekleyebilirsin.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = prefs.ttsVoice.isEmpty(),
+                            onClick = { onPrefs { it.copy(ttsVoice = "") } },
+                            label = { Text("Varsayılan") },
+                        )
+                        voices.forEach { v ->
+                            FilterChip(
+                                selected = prefs.ttsVoice == v.name,
+                                onClick = { onPrefs { it.copy(ttsVoice = v.name) } },
+                                label = { Text(v.label) },
+                            )
+                        }
+                    }
+                    Text(
+                        "Cinsiyet bilgisi her cihazda bulunmayabilir; sesleri dinleyerek seçebilirsin. Kalın bir erkek sesi için bir erkek ses + \"Bariton\" tonunu dene.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                FilledTonalButton(onClick = onPreviewVoice) {
+                    Icon(Icons.Filled.PlayArrow, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Sesi dinle")
+                }
+            }
             Spacer(Modifier.height(8.dp))
         }
     }

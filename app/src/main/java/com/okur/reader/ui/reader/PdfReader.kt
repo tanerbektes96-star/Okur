@@ -1,6 +1,8 @@
 package com.okur.reader.ui.reader
 
 import android.graphics.Bitmap
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.animateScrollBy
@@ -45,7 +47,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -54,6 +59,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.okur.reader.data.PageMode
+import com.okur.reader.data.PageTurn
 import com.okur.reader.data.ReaderTheme
 import com.okur.reader.format.PdfDocument
 import kotlinx.coroutines.flow.Flow
@@ -170,6 +176,8 @@ fun PdfReader(
     tapZones: Boolean,
     theme: ReaderTheme,
     followTheme: Boolean,
+    chromeVisible: Boolean,
+    pageTurn: PageTurn,
     onPage: (Int) -> Unit,
     onTap: () -> Unit,
     modifier: Modifier = Modifier,
@@ -220,6 +228,7 @@ fun PdfReader(
                         val w = zoom.size.width.toFloat()
                         val h = zoom.size.height.toFloat()
                         when {
+                            chromeVisible -> onTap()
                             tapZones && !zoom.zoomed && pos.x < w * 0.25f -> scope.launch { listState.animateScrollBy(-h * 0.85f) }
                             tapZones && !zoom.zoomed && pos.x > w * 0.75f -> scope.launch { listState.animateScrollBy(h * 0.85f) }
                             else -> onTap()
@@ -257,6 +266,10 @@ fun PdfReader(
             val spreads = ceil(doc.pageCount / perSpread.toFloat()).toInt().coerceAtLeast(1)
             val pagerState = rememberPagerState(initialPage = (initialPage / perSpread).coerceIn(0, spreads - 1)) { spreads }
             val renderWidth = with(density) { (maxWidth / perSpread).roundToPx() } * (if (zoom.scale > 1.8f) 2 else 1)
+            val turnTo: suspend (Int) -> Unit = { target ->
+                if (pageTurn == PageTurn.NONE) pagerState.scrollToPage(target)
+                else pagerState.animateScrollToPage(target, animationSpec = tween(if (pageTurn == PageTurn.CURL) 420 else 300, easing = FastOutSlowInEasing))
+            }
 
             LaunchedEffect(pagerState, perSpread) {
                 snapshotFlow { pagerState.currentPage }.distinctUntilChanged().collect {
@@ -271,8 +284,7 @@ fun PdfReader(
             LaunchedEffect(jump) { jump?.let { pagerState.scrollToPage(it.first / perSpread) } }
             LaunchedEffect(pagerState) {
                 commands.collect { dir ->
-                    val target = (pagerState.currentPage + dir).coerceIn(0, spreads - 1)
-                    pagerState.animateScrollToPage(target)
+                    turnTo((pagerState.currentPage + dir).coerceIn(0, spreads - 1))
                 }
             }
 
@@ -282,10 +294,11 @@ fun PdfReader(
                     .zoomGestures(zoom, singleFingerPan = true) { pos ->
                         val w = zoom.size.width.toFloat()
                         when {
-                            tapZones && !zoom.zoomed && pos.x < w * 0.28f ->
-                                scope.launch { pagerState.animateScrollToPage((pagerState.currentPage - 1).coerceAtLeast(0)) }
-                            tapZones && !zoom.zoomed && pos.x > w * 0.72f ->
-                                scope.launch { pagerState.animateScrollToPage((pagerState.currentPage + 1).coerceAtMost(spreads - 1)) }
+                            chromeVisible -> onTap()
+                            tapZones && !zoom.zoomed && pos.x < w * 0.25f ->
+                                scope.launch { turnTo((pagerState.currentPage - 1).coerceAtLeast(0)) }
+                            tapZones && !zoom.zoomed && pos.x > w * 0.75f ->
+                                scope.launch { turnTo((pagerState.currentPage + 1).coerceAtMost(spreads - 1)) }
                             else -> onTap()
                         }
                     }
@@ -301,6 +314,30 @@ fun PdfReader(
                     Row(
                         Modifier
                             .fillMaxSize()
+                            .zIndex(if (pagerState.currentPage > spread || (pagerState.currentPage == spread && pagerState.currentPageOffsetFraction > 0f)) 1f else 0f)
+                            .graphicsLayer {
+                                // Kitap sayfası gibi çevirme: giden sayfa sol kenarı etrafında döner, gelen sayfa altta sabit durur
+                                if (pageTurn == PageTurn.CURL) {
+                                    val offset = (pagerState.currentPage - spread) + pagerState.currentPageOffsetFraction
+                                    if (offset != 0f && kotlin.math.abs(offset) < 1f) {
+                                        translationX = offset * size.width
+                                        if (offset > 0f) {
+                                            transformOrigin = TransformOrigin(0f, 0.5f)
+                                            rotationY = 90f * offset
+                                            cameraDistance = 14f * density
+                                        }
+                                    }
+                                }
+                            }
+                            .drawWithContent {
+                                drawContent()
+                                if (pageTurn == PageTurn.CURL) {
+                                    val offset = (pagerState.currentPage - spread) + pagerState.currentPageOffsetFraction
+                                    if (offset > 0f && offset < 1f) drawRect(Color.Black.copy(alpha = 0.35f * offset))
+                                    else if (offset < 0f && offset > -1f) drawRect(Color.Black.copy(alpha = 0.3f * -offset))
+                                }
+                            }
+                            .background(pageBackdrop)
                             .graphicsLayer {
                                 if (isCurrent) {
                                     scaleX = zoom.scale

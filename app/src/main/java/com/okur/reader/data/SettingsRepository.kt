@@ -37,6 +37,10 @@ class SettingsRepository(private val context: Context) {
         val orientation = stringPreferencesKey("r_orientation")
         val pdfFollowTheme = booleanPreferencesKey("r_pdf_follow_theme")
         val ttsRate = floatPreferencesKey("r_tts_rate")
+        val ttsPitch = floatPreferencesKey("r_tts_pitch")
+        val ttsVoice = stringPreferencesKey("r_tts_voice")
+        val pageTurn = stringPreferencesKey("r_page_turn")
+        val tapGuideShown = booleanPreferencesKey("r_tap_guide_shown")
 
         // Göz bakımı
         val filterMode = stringPreferencesKey("e_filter_mode")
@@ -85,6 +89,10 @@ class SettingsRepository(private val context: Context) {
             orientation = enum(K.orientation, d.orientation),
             pdfFollowTheme = this[K.pdfFollowTheme] ?: d.pdfFollowTheme,
             ttsRate = this[K.ttsRate] ?: d.ttsRate,
+            ttsPitch = this[K.ttsPitch] ?: d.ttsPitch,
+            ttsVoice = this[K.ttsVoice] ?: d.ttsVoice,
+            pageTurn = enum(K.pageTurn, d.pageTurn),
+            tapGuideShown = this[K.tapGuideShown] ?: d.tapGuideShown,
         )
     }
 
@@ -138,6 +146,10 @@ class SettingsRepository(private val context: Context) {
             p[K.orientation] = n.orientation.name
             p[K.pdfFollowTheme] = n.pdfFollowTheme
             p[K.ttsRate] = n.ttsRate
+            p[K.ttsPitch] = n.ttsPitch
+            p[K.ttsVoice] = n.ttsVoice
+            p[K.pageTurn] = n.pageTurn.name
+            p[K.tapGuideShown] = n.tapGuideShown
         }
     }
 

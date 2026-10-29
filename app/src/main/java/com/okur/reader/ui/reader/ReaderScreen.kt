@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.RemoveRedEye
 import androidx.compose.material.icons.filled.Search
@@ -57,6 +58,7 @@ import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
@@ -90,6 +92,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -112,6 +115,7 @@ import com.okur.reader.eyecare.isNightNow
 import com.okur.reader.eyecare.rememberCurrentHour
 import com.okur.reader.reader.ReaderKeys
 import com.okur.reader.tts.TtsController
+import com.okur.reader.tts.TtsState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
@@ -289,14 +293,30 @@ private fun ReaderScaffold(
 
     // ---- Sesli okuma ----
     val tts = remember { TtsController(context) }
-    val speaking by tts.speaking.collectAsStateWithLifecycle()
+    val ttsState by tts.state.collectAsStateWithLifecycle()
+    val ttsVoices by tts.voices.collectAsStateWithLifecycle()
+    val speaking = ttsState == TtsState.SPEAKING
+    val ttsActive = ttsState != TtsState.IDLE
     var ttsContinue by remember { mutableStateOf(false) }
     DisposableEffect(Unit) { onDispose { tts.shutdown() } }
     val reflowBook = (content as? ReaderContent.Reflow)?.book
+    val ttsLanguage = reflowBook?.language ?: book?.language
+    LaunchedEffect(ttsLanguage, prefs.ttsRate, prefs.ttsPitch, prefs.ttsVoice) {
+        tts.configure(ttsLanguage, prefs.ttsRate, prefs.ttsPitch, prefs.ttsVoice)
+        tts.restartCurrent()
+    }
     val startTts: () -> Unit = {
         webController.textFromHere { text ->
             if (text.isBlank()) vm.nextChapter().also { ttsContinue = true }
-            else tts.speak(text, reflowBook?.language ?: book?.language, prefs.ttsRate)
+            else tts.speak(text)
+        }
+    }
+    // Üst çubuktaki düğme: oku → duraklat → kaldığın yerden devam
+    val toggleTts: () -> Unit = {
+        when (ttsState) {
+            TtsState.SPEAKING -> tts.pause()
+            TtsState.PAUSED -> tts.resume()
+            TtsState.IDLE -> startTts()
         }
     }
     tts.onChunkStart = { webController.ensureVisible(it) }
@@ -314,10 +334,10 @@ private fun ReaderScaffold(
         repeat(15) {
             delay(400)
             webController.textFromHere { text ->
-                if (text.isNotBlank() && !tts.speaking.value) tts.speak(text, reflowBook?.language ?: book?.language, prefs.ttsRate)
+                if (text.isNotBlank() && tts.state.value == TtsState.IDLE) tts.speak(text)
             }
             delay(200)
-            if (tts.speaking.value) return@LaunchedEffect
+            if (tts.state.value != TtsState.IDLE) return@LaunchedEffect
         }
     }
 
@@ -372,6 +392,7 @@ private fun ReaderScaffold(
                             runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, uri)) }
                         }
                     },
+                    chromeVisible = chromeVisible,
                     modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.displayCutout),
                 )
                 is ReaderContent.Pdf -> PdfReader(
@@ -384,6 +405,8 @@ private fun ReaderScaffold(
                     tapZones = prefs.tapZones,
                     theme = theme,
                     followTheme = prefs.pdfFollowTheme,
+                    chromeVisible = chromeVisible,
+                    pageTurn = prefs.pageTurn,
                     onPage = vm::onPdfPage,
                     onTap = vm::toggleChrome,
                     modifier = Modifier.fillMaxSize(),
@@ -419,7 +442,7 @@ private fun ReaderScaffold(
                     background = chromeBg,
                     isReflow = content is ReaderContent.Reflow,
                     bookmarked = vm.currentBookmark(bookmarks) != null,
-                    speaking = speaking,
+                    ttsState = ttsState,
                     smartEyeOn = smartEyeOn,
                     looking = eyeState.looking,
                     onBack = onBack,
@@ -428,7 +451,7 @@ private fun ReaderScaffold(
                         if (content is ReaderContent.Reflow) webController.visibleSnippet { vm.toggleBookmark(it) }
                         else vm.toggleBookmark("")
                     },
-                    onTts = { if (speaking) tts.stop() else startTts() },
+                    onTts = toggleTts,
                     onAppearance = { showAppearance = true },
                 )
             }
@@ -447,11 +470,26 @@ private fun ReaderScaffold(
                 }
             }
 
+            // İlk açılışta dokunma bölgeleri rehberi
+            if (!prefs.tapGuideShown && (content is ReaderContent.Reflow || content is ReaderContent.Pdf)) {
+                TapGuide(tapZones = prefs.tapZones) {
+                    vm.setChrome(false)
+                    updatePrefs { it.copy(tapGuideShown = true) }
+                }
+            }
+
             // Alt çubuk
             Column(Modifier.align(Alignment.BottomCenter)) {
                 SnackbarHost(snackbar, Modifier.align(Alignment.CenterHorizontally))
-                AnimatedVisibility(speaking && !chromeVisible, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.CenterHorizontally)) {
-                    TtsPill(chromeBg, prefs.ttsRate, onStop = { tts.stop() }, onRate = { r -> updatePrefs { it.copy(ttsRate = r) } })
+                AnimatedVisibility(ttsActive, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.CenterHorizontally)) {
+                    TtsPill(
+                        background = chromeBg,
+                        rate = prefs.ttsRate,
+                        paused = ttsState == TtsState.PAUSED,
+                        onPlayPause = toggleTts,
+                        onStop = { tts.stop() },
+                        onRate = { r -> updatePrefs { it.copy(ttsRate = r) } },
+                    )
                 }
                 AnimatedVisibility(
                     visible = chromeVisible,
@@ -463,8 +501,6 @@ private fun ReaderScaffold(
                         theme = theme,
                         progress = sliderDrag ?: progress,
                         label = bottomLabel(content, reflowPos, pdfPage, sliderDrag ?: progress, sliderDrag != null),
-                        speaking = speaking,
-                        ttsRate = prefs.ttsRate,
                         isPdf = content is ReaderContent.Pdf,
                         isDark = theme.isDark,
                         onSlide = { sliderDrag = it },
@@ -475,8 +511,6 @@ private fun ReaderScaffold(
                         onToggleNight = {
                             updatePrefs { p -> p.copy(theme = if (p.theme.isDark) ReaderTheme.PAPER else ReaderTheme.DARK) }
                         },
-                        onStopTts = { tts.stop() },
-                        onTtsRate = { r -> updatePrefs { it.copy(ttsRate = r) } },
                     )
                 }
             }
@@ -491,6 +525,8 @@ private fun ReaderScaffold(
             isPdf = content is ReaderContent.Pdf,
             onPrefs = updatePrefs,
             onEye = updateEye,
+            voices = ttsVoices,
+            onPreviewVoice = { tts.preview("Merhaba, bu ses ile kitabını okuyabilirim.") },
             onDismiss = { showAppearance = false },
         )
     }
@@ -561,7 +597,7 @@ private fun TopChrome(
     background: Color,
     isReflow: Boolean,
     bookmarked: Boolean,
-    speaking: Boolean,
+    ttsState: TtsState,
     smartEyeOn: Boolean,
     looking: Boolean,
     onBack: () -> Unit,
@@ -593,7 +629,11 @@ private fun TopChrome(
             if (isReflow) {
                 IconButton(onClick = onSearch) { Icon(Icons.Filled.Search, "Kitapta ara") }
                 IconButton(onClick = onTts) {
-                    Icon(if (speaking) Icons.Filled.Stop else Icons.Filled.RecordVoiceOver, if (speaking) "Sesli okumayı durdur" else "Sesli oku")
+                    when (ttsState) {
+                        TtsState.SPEAKING -> Icon(Icons.Filled.Pause, "Sesli okumayı duraklat")
+                        TtsState.PAUSED -> Icon(Icons.Filled.PlayArrow, "Sesli okumaya devam et")
+                        TtsState.IDLE -> Icon(Icons.Filled.RecordVoiceOver, "Sesli oku")
+                    }
                 }
             }
             IconButton(onClick = onBookmark) {
@@ -614,8 +654,6 @@ private fun BottomChrome(
     theme: ReaderTheme,
     progress: Float,
     label: String,
-    speaking: Boolean,
-    ttsRate: Float,
     isPdf: Boolean,
     isDark: Boolean,
     onSlide: (Float) -> Unit,
@@ -624,14 +662,9 @@ private fun BottomChrome(
     onAppearance: () -> Unit,
     onLabelClick: () -> Unit,
     onToggleNight: () -> Unit,
-    onStopTts: () -> Unit,
-    onTtsRate: (Float) -> Unit,
 ) {
     Surface(color = background, contentColor = LocalContentColor.current, shadowElevation = 8.dp) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 12.dp, vertical = 6.dp)) {
-            if (speaking) {
-                TtsPill(lerp(background, theme.text, 0.06f), ttsRate, onStop = onStopTts, onRate = onTtsRate)
-            }
             Text(
                 label,
                 style = MaterialTheme.typography.labelLarge,
@@ -675,18 +708,31 @@ private fun ChromeAction(icon: androidx.compose.ui.graphics.vector.ImageVector, 
 }
 
 @Composable
-private fun TtsPill(background: Color, rate: Float, onStop: () -> Unit, onRate: (Float) -> Unit) {
+private fun TtsPill(
+    background: Color,
+    rate: Float,
+    paused: Boolean,
+    onPlayPause: () -> Unit,
+    onStop: () -> Unit,
+    onRate: (Float) -> Unit,
+) {
     val rates = listOf(0.75f, 1f, 1.25f, 1.5f, 2f)
-    Surface(color = background, shape = RoundedCornerShape(24.dp), shadowElevation = 2.dp, modifier = Modifier.padding(bottom = 8.dp)) {
-        Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Filled.RecordVoiceOver, null, Modifier.padding(start = 8.dp).size(18.dp))
-            Text("Sesli okunuyor", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 8.dp))
+    Surface(color = background, shape = RoundedCornerShape(28.dp), shadowElevation = 4.dp, modifier = Modifier.padding(bottom = 10.dp)) {
+        Row(Modifier.padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            FilledIconButton(onClick = onPlayPause) {
+                Icon(if (paused) Icons.Filled.PlayArrow else Icons.Filled.Pause, if (paused) "Devam et" else "Duraklat")
+            }
+            Text(
+                if (paused) "Duraklatıldı" else "Sesli okunuyor",
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier.padding(horizontal = 8.dp),
+            )
             TextButton(onClick = { onRate(rates[(rates.indexOf(rate).coerceAtLeast(0) + 1) % rates.size]) }) {
                 Icon(Icons.Filled.Speed, null, Modifier.size(18.dp))
                 Spacer(Modifier.width(4.dp))
                 Text("${rate}x")
             }
-            IconButton(onClick = onStop) { Icon(Icons.Filled.Pause, "Durdur") }
+            IconButton(onClick = onStop) { Icon(Icons.Filled.Stop, "Sesli okumayı bitir") }
         }
     }
 }
@@ -711,6 +757,53 @@ private fun FooterStatus(content: ReaderContent, pos: ReflowPosition, pdfPage: I
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.navigationBarsPadding().padding(bottom = 6.dp, start = 24.dp, end = 24.dp),
     )
+}
+
+@Composable
+private fun TapGuide(tapZones: Boolean, onDismiss: () -> Unit) {
+    val scrim = Color.Black.copy(alpha = 0.62f)
+    Box(
+        Modifier
+            .zIndex(10f)
+            .fillMaxSize()
+            .background(scrim)
+            .clickable(onClick = onDismiss),
+    ) {
+        Row(Modifier.fillMaxSize()) {
+            if (tapZones) GuideZone("‹", "Önceki sayfa", Modifier.weight(1f))
+            GuideZone("☰", "Menüyü aç / kapat", Modifier.weight(2f), highlighted = true)
+            if (tapZones) GuideZone("›", "Sonraki sayfa", Modifier.weight(1f))
+        }
+        Column(
+            Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                "Sayfayı parmağınla sağa-sola kaydırarak da çevirebilirsin. Menü açıkken herhangi bir yere dokunmak menüyü kapatır.",
+                color = Color.White,
+                style = MaterialTheme.typography.bodyLarge,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+            Spacer(Modifier.size(16.dp))
+            Button(onClick = onDismiss) { Text("Anladım") }
+        }
+    }
+}
+
+@Composable
+private fun GuideZone(symbol: String, label: String, modifier: Modifier, highlighted: Boolean = false) {
+    Column(
+        modifier
+            .fillMaxSize()
+            .padding(6.dp)
+            .background(Color.White.copy(alpha = if (highlighted) 0.10f else 0.05f), RoundedCornerShape(20.dp)),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text(symbol, color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.Light)
+        Spacer(Modifier.size(8.dp))
+        Text(label, color = Color.White, style = MaterialTheme.typography.titleSmall, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+    }
 }
 
 @Composable

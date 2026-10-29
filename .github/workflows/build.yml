@@ -31,7 +31,12 @@ jobs:
       - name: Build APKs
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon --stacktrace assembleDebug assembleRelease
+          set -o pipefail
+          ./gradlew --no-daemon assembleDebug assembleRelease 2>&1 | tee build.log || {
+            # Derleme hatalarını GitHub'da okunabilir uyarılar olarak göster
+            grep -E "^e: |error:|What went wrong" -A3 build.log | head -60 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: okur-apk

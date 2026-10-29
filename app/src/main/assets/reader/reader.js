@@ -30,6 +30,8 @@
   var W = 0, H = 0, page = 0, count = 1, ready = false, anim = null;
 
   function paged() { return cfg.mode === 'paged'; }
+  function turnStyle() { return cfg.turn || 'slide'; }
+  var chromeVisible = !!cfg.chrome;
 
   function applyLayout() {
     W = window.innerWidth;
@@ -194,10 +196,16 @@
   }
 
   // ---- Gezinme ----
+  function turnWithin(dir) {
+    var style = turnStyle();
+    if (style === 'curl') B.curlAuto(dir);
+    else goTo(page + dir, style === 'slide');
+  }
+
   function next() {
     if (paged()) {
-      if (page < count - 1) goTo(page + 1, true);
-      else { goTo(page, true); B.next(); }
+      if (page < count - 1) turnWithin(1);
+      else { goTo(page, false); B.next(); }
     } else {
       var s = scroller();
       if (s.scrollTop + H >= s.scrollHeight - 4) B.next();
@@ -207,8 +215,8 @@
 
   function prev() {
     if (paged()) {
-      if (page > 0) goTo(page - 1, true);
-      else { goTo(0, true); B.prev(); }
+      if (page > 0) turnWithin(-1);
+      else { goTo(0, false); B.prev(); }
     } else {
       var s = scroller();
       if (s.scrollTop <= 4) B.prev();
@@ -218,6 +226,7 @@
 
   // ---- Dokunma ----
   var sx = 0, sy = 0, st = 0, moved = false, dragging = false, baseLeft = 0, multi = false;
+  var maxMove = 0, curlDir = 0, curlTick = false, lastDx = 0;
 
   function hasSelection() {
     var sel = window.getSelection();
@@ -233,7 +242,7 @@
     if (multi) return;
     var t = e.touches[0];
     sx = t.clientX; sy = t.clientY; st = Date.now();
-    moved = false; dragging = false;
+    moved = false; dragging = false; maxMove = 0; curlDir = 0; lastDx = 0;
     cancelAnim();
     baseLeft = scroller().scrollLeft;
   }, { passive: true });
@@ -242,11 +251,25 @@
     if (multi || e.touches.length > 1) return;
     var t = e.touches[0];
     var dx = t.clientX - sx, dy = t.clientY - sy;
-    if (!moved && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
+    maxMove = Math.max(maxMove, Math.abs(dx), Math.abs(dy));
+    lastDx = dx;
+    if (!moved && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
       moved = true;
       dragging = paged() && Math.abs(dx) > Math.abs(dy) && !hasSelection();
+      if (dragging && turnStyle() === 'curl') {
+        var dir = dx < 0 ? 1 : -1;
+        curlDir = (dir > 0 ? page < count - 1 : page > 0) ? dir : 0;
+        if (curlDir) B.curlStart(curlDir);
+      }
     }
-    if (dragging) {
+    if (dragging && turnStyle() !== 'slide') {
+      // Kıvrılma: çizim yerel tarafta; animasyonsuz modda içerik sabit kalır
+      e.preventDefault();
+      if (curlDir && !curlTick) {
+        curlTick = true;
+        requestAnimationFrame(function () { curlTick = false; B.curlMove(lastDx / W); });
+      }
+    } else if (dragging) {
       e.preventDefault();
       var x = baseLeft - dx;
       var maxX = (count - 1) * W;
@@ -264,17 +287,30 @@
     if (dragging) {
       dragging = false;
       var fast = Math.abs(dx) / dt > 0.35;
-      if (dx < -W * 0.18 || (fast && dx < -24)) next();
-      else if (dx > W * 0.18 || (fast && dx > 24)) prev();
-      else goTo(page, true);
+      var forward = dx < -W * 0.18 || (fast && dx < -24);
+      var backward = dx > W * 0.18 || (fast && dx > 24);
+      if (curlDir) {
+        B.curlEnd(curlDir > 0 ? forward : backward);
+        curlDir = 0;
+        return;
+      }
+      if (turnStyle() === 'slide') {
+        if (forward) next(); else if (backward) prev(); else goTo(page, true);
+      } else {
+        // Bölüm sınırı veya animasyonsuz mod
+        if (forward) { if (page < count - 1) goTo(page + 1, false); else B.next(); }
+        else if (backward) { if (page > 0) goTo(page - 1, false); else B.prev(); }
+      }
       return;
     }
-    if (moved || dt > 400) return;
+    // Dokunma: küçük titremelere tolerans
+    if (maxMove > 18 || dt > 500) return;
     if (hasSelection()) { window.getSelection().removeAllRanges(); return; }
     if (isInteractive(e.target)) return;
+    if (chromeVisible) { B.onTap('center'); return; }
     var zone = t.clientX / W;
-    if (cfg.tapZones && zone < 0.28) prev();
-    else if (cfg.tapZones && zone > 0.72) next();
+    if (cfg.tapZones && zone < 0.25) prev();
+    else if (cfg.tapZones && zone > 0.75) next();
     else B.onTap('center');
   }, { passive: true });
 
@@ -471,6 +507,8 @@
     prev: prev,
     goToFraction: function (f) { goToFraction(f); },
     goToAnchor: goToAnchor,
+    jumpBy: function (d) { goTo(page + d, false); },
+    setChrome: function (v) { chromeVisible = !!v; },
     setTheme: function (css) {
       var anchor = ready ? firstVisibleNode() : null;
       themeStyle.textContent = css;
