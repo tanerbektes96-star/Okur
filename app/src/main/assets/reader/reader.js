@@ -142,6 +142,7 @@
   function textWalker() {
     return document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
       acceptNode: function (n) {
+        if (curl.root && curl.root.contains(n)) return NodeFilter.FILTER_REJECT;
         return n.nodeValue && n.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
       }
     });
@@ -175,6 +176,7 @@
   function relayout(preAnchor) {
     var anchor = preAnchor !== undefined ? preAnchor : (ready ? firstVisibleNode() : null);
     var f = currentFraction();
+    curlInvalidate();
     applyLayout();
     measure();
     if (anchor) {
@@ -195,11 +197,137 @@
     return true;
   }
 
+  // ---- Sayfa kıvrılma (gerçekçi çevirme) ----
+  // Sayfanın bir kopyası sabit bir katmanda tutulur; çevrilen sayfa bu kopyadan kırpılarak çizilir,
+  // katlanan kanat ve gölgeler CSS ile verilir. Yerel ekran görüntüsüne ihtiyaç duymaz.
+  var curl = { root: null, page: null, inner: null, flap: null, shadow: null, active: false, dir: 0, from: 0, p: 0, raf: null, auto: false };
+
+  function curlInvalidate() {
+    if (curl.active) curlFinishNow();
+    if (curl.root && curl.root.parentNode) curl.root.parentNode.removeChild(curl.root);
+    curl.root = null;
+  }
+
+  function curlBuild() {
+    var bg = window.getComputedStyle(root).backgroundColor || '#fff';
+    var bs = window.getComputedStyle(document.body);
+    var r = document.createElement('div');
+    r.id = 'okur-curl';
+    var pg = document.createElement('div');
+    pg.className = 'okur-cp';
+    var inner = document.createElement('div');
+    inner.className = 'okur-ci';
+    for (var c = document.body.firstChild; c; c = c.nextSibling) {
+      if (c === r) continue;
+      inner.appendChild(c.cloneNode(true));
+    }
+    inner.style.cssText =
+      'position:absolute;left:0;top:0;margin:0;box-sizing:border-box;width:' + W + 'px;height:' + H + 'px;' +
+      'padding:' + bs.paddingTop + ' ' + bs.paddingRight + ' ' + bs.paddingBottom + ' ' + bs.paddingLeft + ';' +
+      'column-count:' + bs.columnCount + ';column-gap:' + bs.columnGap + ';column-fill:auto;';
+    pg.appendChild(inner);
+    var fl = document.createElement('div'); fl.className = 'okur-cf';
+    var sh = document.createElement('div'); sh.className = 'okur-cs';
+    r.appendChild(sh); r.appendChild(pg); r.appendChild(fl);
+    var st = document.getElementById('okur-curl-style') || document.createElement('style');
+    st.id = 'okur-curl-style';
+    st.textContent =
+      '#okur-curl{position:fixed !important;left:0;top:0;width:' + W + 'px;height:' + H + 'px;z-index:2147483646;' +
+      'pointer-events:none;visibility:hidden;overflow:hidden;background:transparent !important;}' +
+      '#okur-curl .okur-cp{position:absolute !important;left:0;top:0;width:' + W + 'px;height:' + H + 'px;overflow:hidden;' +
+      'background-color:' + bg + ' !important;will-change:clip-path;}' +
+      '#okur-curl .okur-ci{will-change:transform;}' +
+      '#okur-curl .okur-cf{position:absolute !important;top:0;height:' + H + 'px;' +
+      'background-color:' + bg + ' !important;' +
+      'background-image:linear-gradient(to right,rgba(255,255,255,.22),rgba(255,255,255,0) 22%,rgba(0,0,0,0) 62%,rgba(0,0,0,.20)) !important;' +
+      'box-shadow:-4px 0 14px rgba(0,0,0,.22);will-change:transform,width;}' +
+      '#okur-curl .okur-cs{position:absolute !important;top:0;height:' + H + 'px;width:40px;' +
+      'background-image:linear-gradient(to right,rgba(0,0,0,.30),rgba(0,0,0,0)) !important;will-change:transform,opacity;}';
+    headOrRoot().appendChild(st);
+    document.body.appendChild(r);
+    curl.root = r; curl.page = pg; curl.inner = inner; curl.flap = fl; curl.shadow = sh;
+  }
+
+  /** p: 0 = çevrilen sayfa tamamen ekranda, 1 = tamamen çevrilmiş */
+  function curlDraw(p) {
+    p = Math.max(0, Math.min(1, p));
+    curl.p = p;
+    var fold = W * (1 - p);
+    var flapLeft = 2 * fold - W;
+    curl.page.style.clipPath = 'inset(0 ' + (W - fold) + 'px 0 0)';
+    curl.flap.style.transform = 'translateX(' + Math.max(flapLeft, -W) + 'px)';
+    curl.flap.style.width = Math.max(0, fold - Math.max(flapLeft, -W)) + 'px';
+    curl.flap.style.display = p > 0.002 && p < 0.998 ? 'block' : 'none';
+    var sw = 34 * (1 - p * 0.5) + 6;
+    curl.shadow.style.width = sw + 'px';
+    curl.shadow.style.transform = 'translateX(' + fold + 'px)';
+    curl.shadow.style.opacity = String(1 - p * 0.6);
+  }
+
+  function curlStart(dir) {
+    if (curl.active) curlFinishNow();
+    var target = page + dir;
+    if (target < 0 || target > count - 1) return false;
+    if (!curl.root) curlBuild();
+    curl.active = true;
+    curl.dir = dir;
+    curl.from = page;
+    // İleri: kopya mevcut sayfayı gösterir, gerçek belge hemen sonraki sayfaya geçer.
+    // Geri: kopya önceki sayfayı gösterir ve üstten kapanır; gerçek belge sonunda geçer.
+    var shown = dir > 0 ? page : target;
+    curl.inner.style.transform = 'translateX(' + (-shown * W) + 'px)';
+    curlDraw(dir > 0 ? 0 : 1);
+    curl.root.style.visibility = 'visible';
+    if (dir > 0) goTo(target, false);
+    return true;
+  }
+
+  function curlDrag(dx) {
+    if (!curl.active || curl.auto) return;
+    var f = dx / W;
+    curlDraw(curl.dir > 0 ? -f * 1.1 : 1 - f * 1.1);
+  }
+
+  function curlEnd(commit) {
+    if (!curl.active) return;
+    var dir = curl.dir;
+    var target = dir > 0 ? (commit ? 1 : 0) : (commit ? 0 : 1);
+    var start = curl.p, delta = target - start;
+    var duration = 140 + 320 * Math.abs(delta);
+    var t0 = null;
+    if (curl.raf) cancelAnimationFrame(curl.raf);
+    function step(ts) {
+      if (t0 === null) t0 = ts;
+      var k = Math.min(1, (ts - t0) / duration);
+      curlDraw(start + delta * (1 - Math.pow(1 - k, 3)));
+      if (k < 1) curl.raf = requestAnimationFrame(step);
+      else { curl.raf = null; curlComplete(commit); }
+    }
+    curl.raf = requestAnimationFrame(step);
+  }
+
+  function curlComplete(commit) {
+    var dir = curl.dir;
+    if (dir > 0 && !commit) goTo(curl.from, false);
+    if (dir < 0 && commit) goTo(curl.from - 1, false);
+    curl.active = false;
+    curl.auto = false;
+    if (curl.root) curl.root.style.visibility = 'hidden';
+  }
+
+  function curlFinishNow() {
+    if (curl.raf) { cancelAnimationFrame(curl.raf); curl.raf = null; }
+    curlComplete(true);
+  }
+
   // ---- Gezinme ----
   function turnWithin(dir) {
     var style = turnStyle();
-    if (style === 'curl') B.curlAuto(dir);
-    else goTo(page + dir, style === 'slide');
+    if (style === 'curl' && paged()) {
+      if (curlStart(dir)) { curl.auto = true; curlEnd(true); }
+    } else {
+      goTo(page + dir, style === 'slide');
+    }
   }
 
   function next() {
@@ -259,7 +387,7 @@
       if (dragging && turnStyle() === 'curl') {
         var dir = dx < 0 ? 1 : -1;
         curlDir = (dir > 0 ? page < count - 1 : page > 0) ? dir : 0;
-        if (curlDir) B.curlStart(curlDir);
+        if (curlDir && !curlStart(curlDir)) curlDir = 0;
       }
     }
     if (dragging && turnStyle() !== 'slide') {
@@ -267,7 +395,7 @@
       e.preventDefault();
       if (curlDir && !curlTick) {
         curlTick = true;
-        requestAnimationFrame(function () { curlTick = false; B.curlMove(lastDx / W); });
+        requestAnimationFrame(function () { curlTick = false; curlDrag(lastDx); });
       }
     } else if (dragging) {
       e.preventDefault();
@@ -290,7 +418,7 @@
       var forward = dx < -W * 0.18 || (fast && dx < -24);
       var backward = dx > W * 0.18 || (fast && dx > 24);
       if (curlDir) {
-        B.curlEnd(curlDir > 0 ? forward : backward);
+        curlEnd(curlDir > 0 ? forward : backward);
         curlDir = 0;
         return;
       }
@@ -338,6 +466,7 @@
 
   // ---- Arama ----
   function clearSearch() {
+    curlInvalidate();
     var marks = document.querySelectorAll('mark.okur-hl');
     for (var i = 0; i < marks.length; i++) {
       var m = marks[i], p = m.parentNode;
@@ -351,6 +480,7 @@
     var r = document.createRange();
     r.setStart(n, i);
     r.setEnd(n, Math.min(n.nodeValue.length, i + len));
+    curlInvalidate();
     var m = document.createElement('mark');
     m.className = 'okur-hl';
     try { r.surroundContents(m); } catch (err) { return; }
@@ -379,20 +509,105 @@
   }
 
   // ---- Sesli okuma ve yer imi için metin ----
+  // Okunan metnin her parçasının hangi metin düğümüne denk geldiği tutulur; böylece TTS'in
+  // bildirdiği karakter aralığı sayfada tam olarak işaretlenebilir. Bloklar U+2029 ile ayrılır.
+  var ttsSegs = [];
+
   function textFromHere(maxLen) {
+    ttsSegs = [];
     var start = firstVisibleNode();
     if (!start) return '';
     var w = textWalker();
     w.currentNode = start;
-    var parts = [start.nodeValue], len = start.nodeValue.length, n;
-    var lastBlock = blockOf(start);
-    while ((n = w.nextNode()) && len < (maxLen || 200000)) {
+    var out = '', n = start, lastBlock = null, limit = maxLen || 200000;
+    while (n && out.length < limit) {
       var b = blockOf(n);
-      parts.push(b !== lastBlock ? '\n' + n.nodeValue : n.nodeValue);
+      if (lastBlock && b !== lastBlock) out += '\u2029';
       lastBlock = b;
-      len += n.nodeValue.length;
+      ttsSegs.push({ n: n, s: out.length, e: out.length + n.nodeValue.length });
+      out += n.nodeValue;
+      n = w.nextNode();
     }
-    return parts.join('').replace(/[ \t]+/g, ' ');
+    return out;
+  }
+
+  function locate(off, isEnd) {
+    var lo = 0, hi = ttsSegs.length - 1;
+    while (lo <= hi) {
+      var mid = (lo + hi) >> 1, g = ttsSegs[mid];
+      if (off < g.s) hi = mid - 1;
+      else if (off > g.e || (off === g.e && !isEnd)) lo = mid + 1;
+      else return { n: g.n, o: off - g.s };
+    }
+    // Ayırıcıya denk geldiyse en yakın parçaya kaydır
+    var g2 = isEnd ? ttsSegs[Math.max(0, lo - 1)] : ttsSegs[Math.min(ttsSegs.length - 1, lo)];
+    if (!g2) return null;
+    return { n: g2.n, o: isEnd ? g2.n.nodeValue.length : 0 };
+  }
+
+  var hlLayer = null;
+  var hasHighlightApi = !!(window.CSS && CSS.highlights && window.Highlight);
+
+  function ttsMark(start, end, kind) {
+    if (!ttsSegs.length || end <= start) return;
+    var a = locate(start, false), b = locate(end, true);
+    if (!a || !b) return;
+    var r = document.createRange();
+    try { r.setStart(a.n, Math.min(a.o, a.n.nodeValue.length)); r.setEnd(b.n, Math.min(b.o, b.n.nodeValue.length)); } catch (e) { return; }
+    if (hasHighlightApi) {
+      CSS.highlights.set(kind === 'word' ? 'okur-word' : 'okur-sent', new Highlight(r));
+    } else {
+      drawRects(r, kind);
+    }
+    if (kind === 'word' || !hasWordEvents) followRange(r);
+  }
+
+  var hasWordEvents = false;
+
+  function drawRects(r, kind) {
+    if (!hlLayer) {
+      hlLayer = document.createElement('div');
+      hlLayer.id = 'okur-hl-layer';
+      hlLayer.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;pointer-events:none;z-index:2147483645;';
+      document.body.appendChild(hlLayer);
+    }
+    var old = hlLayer.querySelectorAll('.k-' + kind);
+    for (var i = 0; i < old.length; i++) hlLayer.removeChild(old[i]);
+    var rects = r.getClientRects();
+    for (var j = 0; j < rects.length; j++) {
+      var rc = rects[j], d = document.createElement('div');
+      d.className = 'k-' + kind;
+      d.style.cssText = 'position:fixed;border-radius:4px;left:' + rc.left + 'px;top:' + rc.top + 'px;width:' + rc.width + 'px;height:' + rc.height + 'px;' +
+        'background:' + (kind === 'word' ? 'rgba(255,190,60,.55)' : 'rgba(255,190,60,.16)') + ';';
+      hlLayer.appendChild(d);
+    }
+  }
+
+  function followRange(r) {
+    var rects = r.getClientRects();
+    if (!rects.length) return;
+    var rc = rects[0];
+    if (paged()) {
+      if (rc.left < 0 || rc.left >= W - 1) {
+        var target = Math.floor((rc.left + scroller().scrollLeft + 1) / W);
+        if (target === page + 1) turnWithin(1); else goTo(target, true);
+        if (!hasHighlightApi && hlLayer) hlLayer.innerHTML = '';
+      }
+    } else if (rc.top < 0 || rc.bottom > H * 0.85) {
+      animateTop(Math.max(0, scroller().scrollTop + rc.top - H * 0.3));
+    }
+  }
+
+  function ttsClear() {
+    if (hasHighlightApi) { CSS.highlights.delete('okur-word'); CSS.highlights.delete('okur-sent'); }
+    if (hlLayer) hlLayer.innerHTML = '';
+  }
+
+  if (hasHighlightApi) {
+    var hs = document.createElement('style');
+    hs.textContent = '::highlight(okur-sent){background-color:rgba(255,190,60,.18);}' +
+      '::highlight(okur-word){background-color:rgba(255,190,60,.62);}';
+    headOrRoot().appendChild(hs);
   }
 
   function blockOf(n) {
@@ -413,34 +628,6 @@
     var s = n.nodeValue, m;
     while (s.length < 140 && (m = w.nextNode())) s += ' ' + m.nodeValue;
     return s.replace(/\s+/g, ' ').trim().substring(0, 140);
-  }
-
-  /** Sesli okumada okunan paragrafı ekranda tutar. */
-  function ensureVisible(snippet) {
-    if (!snippet || !document.body) return;
-    var key = snippet.replace(/\s+/g, ' ').trim().substring(0, 40);
-    if (!key) return;
-    var start = firstVisibleNode();
-    var w = textWalker(), n;
-    if (start) w.currentNode = start;
-    var node = start;
-    var tries = 0;
-    while (node && tries < 4000) {
-      if (node.nodeValue.replace(/\s+/g, ' ').indexOf(key.substring(0, Math.min(key.length, node.nodeValue.length))) >= 0) {
-        var r = document.createRange();
-        r.selectNodeContents(node);
-        var rects = r.getClientRects();
-        var visible = false;
-        for (var i = 0; i < rects.length; i++) if (isVisible(rects[i])) { visible = true; break; }
-        if (!visible) {
-          if (paged()) goTo(positionOfNode(node), true);
-          else animateTop(Math.max(0, positionOfNode(node) - H / 4));
-        }
-        return;
-      }
-      node = w.nextNode();
-      tries++;
-    }
   }
 
   // ---- Bölüm gezinme düğmeleri (kaydırma modu) ----
@@ -533,7 +720,8 @@
     clearSearch: clearSearch,
     textFromHere: textFromHere,
     visibleSnippet: visibleSnippet,
-    ensureVisible: ensureVisible,
+    ttsMark: function (s, e, kind) { if (kind === 'word') hasWordEvents = true; ttsMark(s, e, kind); },
+    ttsClear: ttsClear,
     fraction: currentFraction
   };
 })();

@@ -16,6 +16,9 @@ enum class VoiceGender { MALE, FEMALE, UNKNOWN }
 
 data class TtsVoice(val name: String, val label: String, val gender: VoiceGender, val offline: Boolean)
 
+/** Okunacak parça ve metnin başından itibaren karakter konumu */
+private class Chunk(val offset: Int, val text: String)
+
 /**
  * Sesli okuma. Metni paragraflara/cümlelere bölüp sıraya koyar.
  * Duraklatıldığında okunan parçayı hatırlar ve [resume] ile aynı yerden devam eder.
@@ -24,7 +27,7 @@ class TtsController(context: Context) {
     private val main = Handler(Looper.getMainLooper())
     private var ready = false
     private var pending: (() -> Unit)? = null
-    private var chunks: List<String> = emptyList()
+    private var chunks: List<Chunk> = emptyList()
     private var currentChunk = 0
     private var session = 0
     private var rate = 1f
@@ -38,7 +41,10 @@ class TtsController(context: Context) {
     private val _voices = MutableStateFlow<List<TtsVoice>>(emptyList())
     val voices: StateFlow<List<TtsVoice>> = _voices
 
-    var onChunkStart: ((String) -> Unit)? = null
+    /** Okunmaya başlanan cümle/parça: [start, end) metin içindeki konum */
+    var onChunk: ((Int, Int) -> Unit)? = null
+    /** Okunan kelime (motor destekliyorsa) */
+    var onWord: ((Int, Int) -> Unit)? = null
     var onFinished: (() -> Unit)? = null
 
     private val tts: TextToSpeech = TextToSpeech(context.applicationContext) { status ->
@@ -59,8 +65,15 @@ class TtsController(context: Context) {
                 main.post {
                     if (s == session) {
                         currentChunk = i
-                        chunks.getOrNull(i)?.let { onChunkStart?.invoke(it) }
+                        chunks.getOrNull(i)?.let { onChunk?.invoke(it.offset, it.offset + it.text.length) }
                     }
+                }
+            }
+
+            override fun onRangeStart(utteranceId: String, start: Int, end: Int, frame: Int) {
+                val (s, i) = parse(utteranceId) ?: return
+                main.post {
+                    if (s == session) chunks.getOrNull(i)?.let { onWord?.invoke(it.offset + start, it.offset + end) }
                 }
             }
 
@@ -89,7 +102,8 @@ class TtsController(context: Context) {
     }
 
     /** Kitabın dilindeki sesleri listeler; erkek/kadın bilgisi ses adından tahmin edilir. */
-    private fun refreshVoices() {
+    fun refreshVoices() {
+        if (!ready) return
         val all = runCatching { tts.voices }.getOrNull().orEmpty()
         val list = all
             .filter { it.locale.language == locale.language }
@@ -100,7 +114,7 @@ class TtsController(context: Context) {
             n++
             val g = genderOf(v.name)
             val genderLabel = when (g) { VoiceGender.MALE -> "Erkek"; VoiceGender.FEMALE -> "Kadın"; VoiceGender.UNKNOWN -> null }
-            val label = listOfNotNull("Ses $n", genderLabel, if (v.isNetworkConnectionRequired) "çevrimiçi" else null).joinToString(" · ")
+            val label = listOfNotNull("Ses $n", genderLabel, if (v.isNetworkConnectionRequired) "internet" else "cihazda").joinToString(" · ")
             TtsVoice(v.name, label, g, !v.isNetworkConnectionRequired)
         }
     }
@@ -110,9 +124,6 @@ class TtsController(context: Context) {
         return when {
             "female" in n || Regex("(^|[-_])f\\d{2}").containsMatchIn(n) -> VoiceGender.FEMALE
             "male" in n || Regex("(^|[-_])m\\d{2}").containsMatchIn(n) -> VoiceGender.MALE
-            // Google TTS Türkçe ses kodları (yaygın eşleşmeler)
-            Regex("-x-(tmc|mfm|efs-?m|tmd)").containsMatchIn(n) -> VoiceGender.MALE
-            Regex("-x-(cfs|efs|ama|tmf)").containsMatchIn(n) -> VoiceGender.FEMALE
             else -> VoiceGender.UNKNOWN
         }
     }
@@ -158,7 +169,7 @@ class TtsController(context: Context) {
         session++
         _state.value = TtsState.SPEAKING
         for (i in index until chunks.size) {
-            tts.speak(chunks[i], if (i == index) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "$session:$i")
+            tts.speak(chunks[i].text.replace('\n', ' ').replace('\u2029', ' '), if (i == index) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "$session:$i")
         }
     }
 
@@ -184,9 +195,10 @@ class TtsController(context: Context) {
         }
     }
 
-    fun preview(text: String) {
+    fun preview(text: String, voice: String? = null) {
         if (!ready) return
         applyVoice()
+        if (voice != null) runCatching { tts.voices?.firstOrNull { it.name == voice } }.getOrNull()?.let { tts.voice = it }
         session++
         tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "preview")
         if (_state.value == TtsState.SPEAKING) _state.value = TtsState.PAUSED
@@ -205,23 +217,56 @@ class TtsController(context: Context) {
         tts.shutdown()
     }
 
-    private fun split(text: String): List<String> {
+    /**
+     * Metni okunacak parçalara böler ve her parçanın metin içindeki konumunu tutar.
+     * Bloklar U+2029 ile ayrılır; uzun paragraflar cümle sınırlarından bölünür.
+     */
+    private fun split(text: String): List<Chunk> {
         val max = minOf(TextToSpeech.getMaxSpeechInputLength() - 100, 600)
-        val out = mutableListOf<String>()
-        text.split('\n').map { it.trim() }.filter { it.isNotEmpty() }.forEach { para ->
-            if (para.length <= max) {
-                out += para
-            } else {
-                val sb = StringBuilder()
-                para.split(Regex("(?<=[.!?…;:])\\s+")).forEach { sentence ->
-                    if (sb.length + sentence.length > max && sb.isNotEmpty()) {
-                        out += sb.toString().trim(); sb.clear()
-                    }
-                    if (sentence.length > max) sentence.chunked(max).forEach { out += it } else sb.append(sentence).append(' ')
-                }
-                if (sb.isNotBlank()) out += sb.toString().trim()
-            }
+        val out = mutableListOf<Chunk>()
+        var i = 0
+        while (i <= text.length) {
+            var end = text.indexOf('\u2029', i)
+            if (end < 0) end = text.length
+            addParagraph(text, i, end, max, out)
+            i = end + 1
         }
         return out
+    }
+
+    private fun addParagraph(text: String, from: Int, to: Int, max: Int, out: MutableList<Chunk>) {
+        var s = from
+        var e = to
+        while (s < e && text[s].isWhitespace()) s++
+        while (e > s && text[e - 1].isWhitespace()) e--
+        if (s >= e) return
+        if (e - s <= max) {
+            out += Chunk(s, text.substring(s, e))
+            return
+        }
+        // Cümle sonlarını bul, parçaları max uzunluğa kadar birleştir
+        val boundaries = mutableListOf<Int>()
+        sentenceEnd.findAll(text.substring(s, e)).forEach { boundaries += s + it.range.last + 1 }
+        boundaries += e
+        var chunkStart = s
+        var last = s
+        for (b in boundaries) {
+            if (b - chunkStart > max && last > chunkStart) {
+                out += Chunk(chunkStart, text.substring(chunkStart, last))
+                chunkStart = last
+            }
+            while (b - chunkStart > max) {
+                var cut = text.lastIndexOf(' ', chunkStart + max)
+                if (cut <= chunkStart) cut = chunkStart + max
+                out += Chunk(chunkStart, text.substring(chunkStart, cut))
+                chunkStart = cut
+            }
+            last = b
+        }
+        if (e > chunkStart) out += Chunk(chunkStart, text.substring(chunkStart, e))
+    }
+
+    private companion object {
+        val sentenceEnd = Regex("[.!?…;:]+[\"'”’)]*\\s+")
     }
 }

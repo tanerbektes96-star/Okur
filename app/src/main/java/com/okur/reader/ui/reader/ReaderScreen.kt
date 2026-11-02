@@ -228,6 +228,11 @@ private fun ReaderScaffold(
         if (smartEyeOn && eye.blinkReminder && bpm in 0..5 && eyeState.facePresent && now - blinkHintAt > 180_000) {
             blinkHintAt = now
             showBlinkHint = true
+        }
+    }
+    // Gizleme ayrı tutulur: kırpma hızı güncellenince yukarıdaki efekt yeniden başlasa da uyarı kapanır
+    LaunchedEffect(showBlinkHint) {
+        if (showBlinkHint) {
             delay(6_000)
             showBlinkHint = false
         }
@@ -319,7 +324,11 @@ private fun ReaderScaffold(
             TtsState.IDLE -> startTts()
         }
     }
-    tts.onChunkStart = { webController.ensureVisible(it) }
+    tts.onChunk = { start, end -> webController.ttsMark(start, end, word = false) }
+    tts.onWord = { start, end -> webController.ttsMark(start, end, word = true) }
+    LaunchedEffect(ttsState) { if (ttsState == TtsState.IDLE) webController.ttsClear() }
+    // Kullanıcı ses paketi indirip geri döndüğünde yeni sesleri listele
+    LaunchedEffect(resumed) { if (resumed) tts.refreshVoices() }
     tts.onFinished = {
         val idx = request?.index ?: 0
         if (reflowBook != null && idx < reflowBook.chapters.lastIndex) {
@@ -466,7 +475,7 @@ private fun ReaderScaffold(
                     Hint("Ekrana çok yakınsın — gözlerini korumak için biraz uzaklaş 👀")
                 }
                 AnimatedVisibility(showBlinkHint, enter = fadeIn(), exit = fadeOut()) {
-                    Hint("Göz kırpmayı unutma 😌 Birkaç kez yavaşça kırp")
+                    Hint("Göz kırpmayı unutma 😌 Birkaç kez yavaşça kırp") { showBlinkHint = false }
                 }
             }
 
@@ -526,7 +535,7 @@ private fun ReaderScaffold(
             onPrefs = updatePrefs,
             onEye = updateEye,
             voices = ttsVoices,
-            onPreviewVoice = { tts.preview("Merhaba, bu ses ile kitabını okuyabilirim.") },
+            onPreviewVoice = { voice -> tts.preview("Merhaba, bu ses ile kitabını okuyabilirim.", voice) },
             onDismiss = { showAppearance = false },
         )
     }
@@ -807,8 +816,10 @@ private fun GuideZone(symbol: String, label: String, modifier: Modifier, highlig
 }
 
 @Composable
-private fun Hint(text: String) {
+private fun Hint(text: String, onClick: (() -> Unit)? = null) {
     Surface(
+        onClick = { onClick?.invoke() },
+        enabled = onClick != null,
         color = MaterialTheme.colorScheme.inverseSurface,
         contentColor = MaterialTheme.colorScheme.inverseOnSurface,
         shape = RoundedCornerShape(20.dp),

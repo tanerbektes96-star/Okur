@@ -18,7 +18,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
@@ -52,13 +51,13 @@ class WebReaderController {
     }
 
     fun next() = js("Okur.next()")
-    fun jumpBy(d: Int) = js("Okur.jumpBy($d)")
     fun setChrome(visible: Boolean) = js("Okur.setChrome($visible)")
     fun prev() = js("Okur.prev()")
     fun setTheme(css: String) = js("Okur.setTheme(${JSONObject.quote(css)})")
     fun setConfig(json: String) = js("Okur.setConfig(${JSONObject.quote(json)})")
     fun goToAnchor(id: String) = js("Okur.goToAnchor(${JSONObject.quote(id)})")
-    fun ensureVisible(snippet: String) = js("Okur.ensureVisible(${JSONObject.quote(snippet)})")
+    fun ttsMark(start: Int, end: Int, word: Boolean) = js("Okur.ttsMark($start,$end,'${if (word) "word" else "sent"}')")
+    fun ttsClear() = js("Okur.ttsClear()")
     fun clearSearch() = js("Okur.clearSearch()")
     fun textFromHere(callback: (String) -> Unit) = eval("Okur.textFromHere(200000)", callback)
     fun visibleSnippet(callback: (String) -> Unit) = eval("Okur.visibleSnippet()", callback)
@@ -71,7 +70,6 @@ private class ReaderCallbacks(
     val onNext: () -> Unit,
     val onPrev: () -> Unit,
     val onLink: (Uri) -> Unit,
-    val curl: PageCurlState,
 )
 
 /** JS'nin konfigürasyonu senkron okuyabilmesi için (JavaBridge iş parçacığından erişilir). */
@@ -122,26 +120,6 @@ private class Bridge(
     @JavascriptInterface
     fun onLink(url: String) {
         main.post { callbacks().onLink(Uri.parse(url)) }
-    }
-
-    @JavascriptInterface
-    fun curlStart(dir: Int) {
-        main.post { callbacks().curl.start(dir) }
-    }
-
-    @JavascriptInterface
-    fun curlMove(dx: Double) {
-        main.post { callbacks().curl.drag(dx.toFloat()) }
-    }
-
-    @JavascriptInterface
-    fun curlEnd(commit: Boolean) {
-        main.post { callbacks().curl.finish(commit) }
-    }
-
-    @JavascriptInterface
-    fun curlAuto(dir: Int) {
-        main.post { callbacks().curl.auto(dir) }
     }
 }
 
@@ -212,14 +190,7 @@ fun EpubWebReader(
 ) {
     val css = remember(prefs, theme) { ReaderCss.build(prefs, theme) }
     val config = remember { ConfigHolder() }
-    val scope = rememberCoroutineScope()
-    val curl = remember {
-        PageCurlState(scope).apply {
-            webView = { controller.webView }
-            jumpBy = { d -> controller.jumpBy(d) }
-        }
-    }
-    val callbacks by rememberUpdatedState(ReaderCallbacks(onPage, onScroll, onTap, onNextChapter, onPrevChapter, onLink, curl))
+    val callbacks by rememberUpdatedState(ReaderCallbacks(onPage, onScroll, onTap, onNextChapter, onPrevChapter, onLink))
 
     Box(modifier) {
     AndroidView(
@@ -254,7 +225,6 @@ fun EpubWebReader(
             wv.destroy()
         },
     )
-    PageCurlOverlay(curl, paper = theme.background)
     }
 
     LaunchedEffect(chromeVisible) { controller.setChrome(chromeVisible) }

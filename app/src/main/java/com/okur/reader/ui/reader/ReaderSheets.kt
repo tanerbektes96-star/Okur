@@ -2,6 +2,9 @@
 
 package com.okur.reader.ui.reader
 
+import android.content.Intent
+import android.provider.Settings
+import android.speech.tts.TextToSpeech
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -67,6 +70,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
@@ -86,6 +90,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.SpanStyle
@@ -123,7 +128,7 @@ fun AppearanceSheet(
     onPrefs: ((ReaderPrefs) -> ReaderPrefs) -> Unit,
     onEye: ((EyePrefs) -> EyePrefs) -> Unit,
     voices: List<TtsVoice>,
-    onPreviewVoice: () -> Unit,
+    onPreviewVoice: (String?) -> Unit,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
@@ -275,7 +280,7 @@ fun AppearanceSheet(
                 SectionTitle("Sesli okuma")
                 Text("Ses tonu", style = MaterialTheme.typography.bodyMedium)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("Bariton (kalın)" to 0.72f, "Normal" to 1f, "İnce" to 1.25f).forEach { (label, value) ->
+                    listOf("Bariton (kalın)" to 0.7f, "Normal" to 1f, "İnce" to 1.25f).forEach { (label, value) ->
                         FilterChip(
                             selected = kotlin.math.abs(prefs.ttsPitch - value) < 0.04f,
                             onClick = { onPrefs { it.copy(ttsPitch = value) } },
@@ -292,41 +297,61 @@ fun AppearanceSheet(
                     onChange = { v -> onPrefs { it.copy(ttsPitch = (v * 20).roundToInt() / 20f) } },
                 )
                 Text("Ses", style = MaterialTheme.typography.bodyMedium)
-                if (voices.isEmpty()) {
-                    Text(
-                        "Bu dil için ek ses bulunamadı. Android Ayarlar → Metin okuma (TTS) bölümünden Google ses verilerini indirerek erkek sesleri ekleyebilirsin.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = prefs.ttsVoice.isEmpty(),
-                            onClick = { onPrefs { it.copy(ttsVoice = "") } },
-                            label = { Text("Varsayılan") },
-                        )
-                        voices.forEach { v ->
-                            FilterChip(
-                                selected = prefs.ttsVoice == v.name,
-                                onClick = { onPrefs { it.copy(ttsVoice = v.name) } },
-                                label = { Text(v.label) },
-                            )
-                        }
+                val context = LocalContext.current
+                Column(Modifier.fillMaxWidth()) {
+                    VoiceRow("Varsayılan ses", selected = prefs.ttsVoice.isEmpty(),
+                        onSelect = { onPrefs { it.copy(ttsVoice = "") }; onPreviewVoice(null) },
+                        onPreview = { onPreviewVoice(null) })
+                    voices.forEach { v ->
+                        VoiceRow(v.label, selected = prefs.ttsVoice == v.name,
+                            onSelect = { onPrefs { it.copy(ttsVoice = v.name) }; onPreviewVoice(v.name) },
+                            onPreview = { onPreviewVoice(v.name) })
                     }
-                    Text(
-                        "Cinsiyet bilgisi her cihazda bulunmayabilir; sesleri dinleyerek seçebilirsin. Kalın bir erkek sesi için bir erkek ses + \"Bariton\" tonunu dene.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
-                FilledTonalButton(onClick = onPreviewVoice) {
-                    Icon(Icons.Filled.PlayArrow, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Sesi dinle")
+                Text(
+                    if (voices.size <= 1) {
+                        "Telefonunda bu dil için tek ses yüklü. Erkek ses için Google \"Konuşma Hizmetleri\" ses paketini indir; " +
+                            "ardından burada yeni sesler görünür. Beklerken \"Bariton\" tonuyla daha kalın bir ses elde edebilirsin."
+                    } else {
+                        "Sesler, telefonundaki konuşma motorundan gelir; dokunarak dinleyip seçebilirsin. " +
+                            "Erkek ses yoksa ses paketini indir ya da \"Bariton\" tonunu kullan."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilledTonalButton(onClick = {
+                        runCatching {
+                            context.startActivity(Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        }
+                    }) { Text("Ses paketi indir") }
+                    TextButton(onClick = {
+                        runCatching {
+                            context.startActivity(Intent("com.android.settings.TTS_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        }.onFailure {
+                            runCatching { context.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                        }
+                    }) { Text("Konuşma ayarları") }
                 }
             }
             Spacer(Modifier.height(8.dp))
         }
+    }
+}
+
+@Composable
+private fun VoiceRow(label: String, selected: Boolean, onSelect: () -> Unit, onPreview: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onSelect)
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = onSelect)
+        Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        IconButton(onClick = onPreview) { Icon(Icons.Filled.PlayArrow, "Dinle") }
     }
 }
 

@@ -61,7 +61,7 @@ data class ReaderPrefs(
     val justify: Boolean = true,
     val hyphenate: Boolean = true,
     val pageMode: PageMode = PageMode.PAGED,
-    val pdfPageMode: PageMode = PageMode.SCROLL,
+    val pdfPageMode: PageMode = PageMode.PAGED,
     val dualPage: Boolean = true,
     val brightness: Float = -1f,
     val volumeKeys: Boolean = true,
