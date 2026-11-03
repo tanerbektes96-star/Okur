@@ -18,13 +18,30 @@ android {
         vectorDrawables.useSupportLibrary = true
     }
 
+    // Sabit imza anahtarı: her derleme aynı imzayı taşır, böylece yeni APK eski sürümün üzerine kurulur.
+    // Anahtar depoda tutulmaz; CI'da OKUR_KEYSTORE_BASE64 gizli değişkeninden dosyaya yazılır.
+    val sideloadKeystore = file("okur-sideload.jks")
+    val hasSideloadKey = sideloadKeystore.exists() && System.getenv("OKUR_KEYSTORE_PASSWORD") != null
+    signingConfigs {
+        if (hasSideloadKey) {
+            create("sideload") {
+                storeFile = sideloadKeystore
+                storePassword = System.getenv("OKUR_KEYSTORE_PASSWORD")
+                keyAlias = "okur"
+                keyPassword = System.getenv("OKUR_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (hasSideloadKey) signingConfig = signingConfigs.getByName("sideload")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Kendi imza anahtarınızı tanımlayana kadar release APK'nın kurulabilmesi için debug anahtarıyla imzalanır.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(if (hasSideloadKey) "sideload" else "debug")
         }
     }
     compileOptions {
