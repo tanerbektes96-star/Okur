@@ -45,7 +45,10 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SendToMobile
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.LocalLibrary
 import androidx.compose.material3.AlertDialog
@@ -115,7 +118,10 @@ val ImportMimeTypes = arrayOf("application/epub+zip", "application/pdf", "text/p
 fun LibraryScreen(
     viewModel: LibraryViewModel,
     onOpenBook: (String) -> Unit,
+    onNearbySend: (List<String>) -> Unit,
+    onNearbyReceive: () -> Unit,
 ) {
+    var showShareMenu by remember { mutableStateOf(false) }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val importing by viewModel.importing.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
@@ -152,6 +158,21 @@ fun LibraryScreen(
                         title = { Text("Kitaplığım") },
                         actions = {
                             IconButton(onClick = { searching = true }) { Icon(Icons.Filled.Search, "Ara") }
+                            Box {
+                                IconButton(onClick = { showShareMenu = true }) { Icon(Icons.Filled.SwapHoriz, "Kitap gönder / al") }
+                                DropdownMenu(expanded = showShareMenu, onDismissRequest = { showShareMenu = false }) {
+                                    DropdownMenuItem(
+                                        text = { Text("Yakındaki Okur'a gönder") },
+                                        leadingIcon = { Icon(Icons.Filled.SendToMobile, null) },
+                                        onClick = { showShareMenu = false; onNearbySend(emptyList()) },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Kitap al") },
+                                        leadingIcon = { Icon(Icons.Filled.Download, null) },
+                                        onClick = { showShareMenu = false; onNearbyReceive() },
+                                    )
+                                }
+                            }
                             Box {
                                 IconButton(onClick = { showSort = true }) { Icon(Icons.AutoMirrored.Filled.Sort, "Sırala") }
                                 DropdownMenu(expanded = showSort, onDismissRequest = { showSort = false }) {
@@ -205,6 +226,7 @@ fun LibraryScreen(
             onFinished = { viewModel.toggleFinished(book); actionBook = null },
             onRename = { t, a -> viewModel.rename(book, t, a); actionBook = null },
             onDelete = { viewModel.delete(book); actionBook = null },
+            onNearbySend = { actionBook = null; onNearbySend(listOf(book.id)) },
         )
     }
 }
@@ -516,6 +538,7 @@ private fun BookActionsSheet(
     onFinished: () -> Unit,
     onRename: (String, String) -> Unit,
     onDelete: () -> Unit,
+    onNearbySend: () -> Unit,
 ) {
     val context = LocalContext.current
     var confirmDelete by remember { mutableStateOf(false) }
@@ -549,7 +572,8 @@ private fun BookActionsSheet(
         )
         SheetAction(Icons.Filled.CheckCircle, if (book.isFinished) "Okunmadı olarak işaretle" else "Bitti olarak işaretle", onClick = onFinished)
         SheetAction(Icons.Filled.Edit, "Başlık ve yazarı düzenle") { renaming = true }
-        SheetAction(Icons.Filled.Share, "Paylaş") {
+        SheetAction(Icons.Filled.SendToMobile, "Yakındaki Okur'a gönder", onClick = onNearbySend)
+        SheetAction(Icons.Filled.Share, "Diğer uygulamalarla paylaş") {
             runCatching {
                 val file = java.io.File(book.filePath)
                 val uri = FileProvider.getUriForFile(context, context.packageName + ".files", file)

@@ -55,6 +55,8 @@ import com.okur.reader.ui.library.LibraryScreen
 import com.okur.reader.ui.library.LibraryViewModel
 import com.okur.reader.ui.reader.ReaderScreen
 import com.okur.reader.ui.settings.SettingsScreen
+import com.okur.reader.ui.onboarding.WelcomePermissions
+import com.okur.reader.ui.share.NearbyScreen
 import com.okur.reader.ui.stats.StatsScreen
 import com.okur.reader.ui.stats.StatsViewModel
 
@@ -90,7 +92,27 @@ fun AppRoot(container: AppContainer, incoming: List<Uri>, onIncomingHandled: () 
             exitTransition = { fadeOut() },
         ) {
             composable("main") {
-                MainScaffold(container, libraryVm) { id -> nav.navigate("reader/$id") { launchSingleTop = true } }
+                MainScaffold(
+                    container = container,
+                    libraryVm = libraryVm,
+                    onOpenBook = { id -> nav.navigate("reader/$id") { launchSingleTop = true } },
+                    onNearbySend = { ids -> nav.navigate("nearby/send?ids=${ids.joinToString(",")}") { launchSingleTop = true } },
+                    onNearbyReceive = { nav.navigate("nearby/receive") { launchSingleTop = true } },
+                )
+            }
+            composable(
+                "nearby/send?ids={ids}",
+                arguments = listOf(navArgument("ids") { type = NavType.StringType; defaultValue = "" }),
+            ) { entry ->
+                val ids = entry.arguments?.getString("ids").orEmpty().split(',').filter { it.isNotBlank() }
+                NearbyScreen(container, sendIds = ids, receive = false, onBack = { nav.popBackStack() }, onOpenBook = {})
+            }
+            composable("nearby/receive") {
+                NearbyScreen(
+                    container, sendIds = emptyList(), receive = true,
+                    onBack = { nav.popBackStack() },
+                    onOpenBook = { id -> nav.navigate("reader/$id") },
+                )
             }
             composable("reader/{bookId}", arguments = listOf(navArgument("bookId") { type = NavType.StringType })) { entry ->
                 val id = entry.arguments?.getString("bookId").orEmpty()
@@ -100,10 +122,22 @@ fun AppRoot(container: AppContainer, incoming: List<Uri>, onIncomingHandled: () 
         // Mavi ışık filtresi + ekstra karartma tüm ekranların üzerinde
         EyeComfortOverlay(eye)
     }
+
+    // İlk açılışta izinler
+    val appPrefs by container.settings.appPrefs.collectAsStateWithLifecycle(initialValue = null)
+    if (appPrefs?.onboardingDone == false) {
+        WelcomePermissions(container)
+    }
 }
 
 @Composable
-private fun MainScaffold(container: AppContainer, libraryVm: LibraryViewModel, onOpenBook: (String) -> Unit) {
+private fun MainScaffold(
+    container: AppContainer,
+    libraryVm: LibraryViewModel,
+    onOpenBook: (String) -> Unit,
+    onNearbySend: (List<String>) -> Unit,
+    onNearbyReceive: () -> Unit,
+) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val useRail = LocalConfiguration.current.screenWidthDp >= 600
     val content: @Composable (Modifier) -> Unit = { modifier ->
@@ -114,7 +148,7 @@ private fun MainScaffold(container: AppContainer, libraryVm: LibraryViewModel, o
             label = "tab",
         ) { current ->
             when (current) {
-                Tab.LIBRARY -> LibraryScreen(libraryVm, onOpenBook)
+                Tab.LIBRARY -> LibraryScreen(libraryVm, onOpenBook, onNearbySend, onNearbyReceive)
                 Tab.STATS -> {
                     val vm: StatsViewModel = viewModel(factory = viewModelFactory { initializer { StatsViewModel(container) } })
                     StatsScreen(vm)

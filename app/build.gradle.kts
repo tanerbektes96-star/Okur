@@ -87,6 +87,7 @@ dependencies {
     implementation(libs.camerax.camera2)
     implementation(libs.camerax.lifecycle)
     implementation(libs.mlkit.face)
+    implementation(libs.play.services.nearby)
 
     implementation(libs.coil.compose)
 }

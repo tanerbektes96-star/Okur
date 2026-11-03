@@ -11,6 +11,7 @@ room = "2.6.1"
 datastore = "1.1.1"
 camerax = "1.4.1"
 mlkitFace = "16.1.7"
+playNearby = "19.3.0"
 coil = "2.7.0"
 splashscreen = "1.0.1"
 
@@ -37,6 +38,7 @@ camerax-core = { group = "androidx.camera", name = "camera-core", version.ref = 
 camerax-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
 camerax-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
 mlkit-face = { group = "com.google.mlkit", name = "face-detection", version.ref = "mlkitFace" }
+play-services-nearby = { group = "com.google.android.gms", name = "play-services-nearby", version.ref = "playNearby" }
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 
 [plugins]

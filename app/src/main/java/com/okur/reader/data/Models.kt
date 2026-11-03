@@ -98,4 +98,7 @@ data class AppPrefs(
     val gridView: Boolean = true,
     val sort: SortOrder = SortOrder.RECENT,
     val dailyGoalMin: Int = 30,
+    /** Yakındaki paylaşımda diğer cihazlarda görünen ad (boşsa cihaz modeli) */
+    val deviceName: String = "",
+    val onboardingDone: Boolean = false,
 )

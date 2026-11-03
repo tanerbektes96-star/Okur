@@ -4,6 +4,7 @@ import android.app.Application
 import com.okur.reader.data.BookRepository
 import com.okur.reader.data.SettingsRepository
 import com.okur.reader.data.db.AppDatabase
+import com.okur.reader.share.NearbyShareManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -25,4 +26,6 @@ class AppContainer(app: Application) {
 
     /** Ekran kapansa bile tamamlanması gereken işler (ör. son konumu kaydetme) için */
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    val nearby = NearbyShareManager(app, books, appScope)
 }

@@ -63,6 +63,8 @@ class SettingsRepository(private val context: Context) {
         val gridView = booleanPreferencesKey("a_grid_view")
         val sort = stringPreferencesKey("a_sort")
         val dailyGoal = intPreferencesKey("a_daily_goal")
+        val deviceName = stringPreferencesKey("a_device_name")
+        val onboardingDone = booleanPreferencesKey("a_onboarding_done")
     }
 
     val readerPrefs: Flow<ReaderPrefs> = context.dataStore.data.map { it.toReader() }
@@ -123,6 +125,8 @@ class SettingsRepository(private val context: Context) {
             gridView = this[K.gridView] ?: d.gridView,
             sort = enum(K.sort, d.sort),
             dailyGoalMin = this[K.dailyGoal] ?: d.dailyGoalMin,
+            deviceName = this[K.deviceName] ?: d.deviceName,
+            onboardingDone = this[K.onboardingDone] ?: d.onboardingDone,
         )
     }
 
@@ -180,6 +184,8 @@ class SettingsRepository(private val context: Context) {
             p[K.gridView] = n.gridView
             p[K.sort] = n.sort.name
             p[K.dailyGoal] = n.dailyGoalMin
+            p[K.deviceName] = n.deviceName
+            p[K.onboardingDone] = n.onboardingDone
         }
     }
 }

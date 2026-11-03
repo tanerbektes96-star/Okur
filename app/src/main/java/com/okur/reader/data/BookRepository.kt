@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import com.okur.reader.data.db.AppDatabase
 import com.okur.reader.data.db.BookEntity
@@ -15,7 +16,9 @@ import com.okur.reader.format.PdfDocument
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.time.LocalDate
 import java.util.UUID
@@ -72,22 +75,12 @@ class BookRepository(private val context: Context, private val db: AppDatabase) 
             var coverPath: String? = null
             var units = 0
 
-            when (format) {
-                BookFormat.EPUB -> {
-                    val meta = EpubBook.readMetadata(target)
-                    meta.title?.takeIf { it.isNotBlank() }?.let { title = it }
-                    meta.author?.takeIf { it.isNotBlank() }?.let { author = it }
-                    language = meta.language
-                    meta.cover?.let { bytes -> coverPath = saveCover(id, bytes) }
-                }
-                BookFormat.PDF -> {
-                    PdfDocument(target).use { pdf ->
-                        units = pdf.pageCount
-                        pdf.render(0, 420)?.let { bmp -> coverPath = saveCover(id, bmp) }
-                    }
-                }
-                BookFormat.TXT -> Unit
-            }
+            val info = readBookInfo(format, target, id)
+            info.title?.let { title = it }
+            info.author?.let { author = it }
+            language = info.language
+            coverPath = info.coverPath
+            units = info.units
 
             val book = BookEntity(
                 id = id,
@@ -109,6 +102,100 @@ class BookRepository(private val context: Context, private val db: AppDatabase) 
             ImportResult.Failed(name, t.message ?: "Bilinmeyen hata")
         }
     }
+
+    private class BookInfo(val title: String?, val author: String?, val language: String?, val coverPath: String?, val units: Int)
+
+    /** Dosyadan başlık, yazar, dil, kapak ve sayfa sayısını çıkarır. */
+    private suspend fun readBookInfo(format: BookFormat, file: File, id: String): BookInfo = when (format) {
+        BookFormat.EPUB -> {
+            val meta = EpubBook.readMetadata(file)
+            BookInfo(
+                meta.title?.takeIf { it.isNotBlank() },
+                meta.author?.takeIf { it.isNotBlank() },
+                meta.language,
+                meta.cover?.let { bytes -> saveCover(id, bytes) },
+                0,
+            )
+        }
+        BookFormat.PDF -> PdfDocument(file).use { pdf ->
+            BookInfo(null, null, null, pdf.render(0, 420)?.let { bmp -> saveCover(id, bmp) }, pdf.pageCount)
+        }
+        BookFormat.TXT -> BookInfo(null, null, null, null, 0)
+    }
+
+    suspend fun bookmarksOnce(bookId: String): List<BookmarkEntity> = db.bookmarks().list(bookId)
+
+    /**
+     * Yakındaki paylaşımla gelen kitabı kitaplığa ekler. Kitap zaten varsa dosya tekrar kopyalanmaz,
+     * yalnızca yeni yer imleri ve notlar eklenir.
+     */
+    suspend fun importReceived(meta: JSONObject, file: ParcelFileDescriptor, cover: ParcelFileDescriptor?): ImportResult =
+        withContext(Dispatchers.IO) {
+            val name = meta.optString("originalName", "kitap")
+            val size = meta.optLong("fileSize", -1)
+            val format = BookFormat.entries.firstOrNull { it.name == meta.optString("format") }
+                ?: return@withContext ImportResult.Failed(name, "Desteklenmeyen biçim")
+            val existing = if (size > 0) db.books().findDuplicate(name, size) else null
+            val book = existing ?: run {
+                val id = UUID.randomUUID().toString()
+                val target = File(booksDir, "$id.${format.name.lowercase()}")
+                try {
+                    FileInputStream(file.fileDescriptor).use { input -> FileOutputStream(target).use { input.copyTo(it, 64 * 1024) } }
+                    var coverPath: String? = null
+                    if (cover != null) {
+                        val coverFile = File(coversDir, "$id.jpg")
+                        FileInputStream(cover.fileDescriptor).use { input -> FileOutputStream(coverFile).use { input.copyTo(it) } }
+                        if (coverFile.length() > 0) coverPath = coverFile.absolutePath
+                    }
+                    val info = readBookInfo(format, target, id)
+                    if (coverPath == null) coverPath = info.coverPath
+                    val entity = BookEntity(
+                        id = id,
+                        title = meta.optString("title").ifBlank { info.title ?: name.substringBeforeLast('.') },
+                        author = meta.optString("author").ifBlank { info.author ?: "Bilinmeyen yazar" },
+                        format = format.name,
+                        filePath = target.absolutePath,
+                        coverPath = coverPath,
+                        fileSize = if (size > 0) size else target.length(),
+                        originalName = name,
+                        language = meta.optString("language").ifBlank { null } ?: info.language,
+                        addedAt = System.currentTimeMillis(),
+                        totalUnits = info.units,
+                    )
+                    db.books().insert(entity)
+                    entity
+                } catch (t: Throwable) {
+                    target.delete()
+                    return@withContext ImportResult.Failed(name, t.message ?: "Kopyalanamadı")
+                }
+            }
+            val marks = meta.optJSONArray("bookmarks")
+            if (marks != null) {
+                val current = db.bookmarks().list(book.id)
+                for (i in 0 until marks.length()) {
+                    val m = marks.getJSONObject(i)
+                    val index = m.optInt("positionIndex")
+                    val fraction = m.optDouble("positionFraction").toFloat()
+                    val note = m.optString("note")
+                    val same = current.any { it.positionIndex == index && kotlin.math.abs(it.positionFraction - fraction) < 0.002f && it.note == note }
+                    if (!same) {
+                        db.bookmarks().insert(
+                            BookmarkEntity(
+                                bookId = book.id,
+                                positionIndex = index,
+                                positionFraction = fraction,
+                                progress = m.optDouble("progress").toFloat(),
+                                label = m.optString("label"),
+                                snippet = m.optString("snippet"),
+                                note = note,
+                                createdAt = m.optLong("createdAt", System.currentTimeMillis()),
+                            )
+                        )
+                    }
+                }
+            }
+            if (existing != null) ImportResult.Duplicate(existing) else ImportResult.Added(book)
+        }
 
     private fun saveCover(id: String, bytes: ByteArray): String? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
