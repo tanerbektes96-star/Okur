@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.ContextCompat
+import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.AdvertisingOptions
 import com.google.android.gms.nearby.connection.ConnectionInfo
@@ -36,11 +37,13 @@ import java.io.File
 object NearbyPermissions {
     val required: Array<String>
         get() = when {
+            // Konum izni yeni sürümlerde resmi olarak gerekmese de bazı cihazlarda BLE keşfi onsuz sonuç vermiyor
             Build.VERSION.SDK_INT >= 33 -> arrayOf(
                 Manifest.permission.BLUETOOTH_ADVERTISE,
                 Manifest.permission.BLUETOOTH_CONNECT,
                 Manifest.permission.BLUETOOTH_SCAN,
                 Manifest.permission.NEARBY_WIFI_DEVICES,
+                Manifest.permission.ACCESS_FINE_LOCATION,
             )
             Build.VERSION.SDK_INT >= 31 -> arrayOf(
                 Manifest.permission.BLUETOOTH_ADVERTISE,
@@ -81,6 +84,7 @@ data class NearbyUiState(
     val incoming: IncomingRequest? = null,
     val items: List<TransferItem> = emptyList(),
     val message: String? = null,
+    val startedAt: Long = 0,
 )
 
 /**
@@ -102,7 +106,8 @@ class NearbyShareManager(
     }
 
     private val client by lazy { Nearby.getConnectionsClient(context) }
-    private val strategy = Strategy.P2P_POINT_TO_POINT
+    // P2P_CLUSTER keşifte en geniş ortam desteğine sahip strateji (BLE, klasik Bluetooth, aynı Wi-Fi ağı)
+    private val strategy = Strategy.P2P_CLUSTER
 
     private val _state = MutableStateFlow(NearbyUiState())
     val state: StateFlow<NearbyUiState> = _state
@@ -126,19 +131,29 @@ class NearbyShareManager(
     // ------------------------------------------------------------------ Başlatma
 
     fun startReceiving(name: String) {
+        runCatching { client.stopAllEndpoints() }
+        runCatching { client.stopDiscovery() }
+        runCatching { client.stopAdvertising() }
         reset()
         myName = name
-        _state.value = NearbyUiState(phase = NearbyPhase.VISIBLE)
+        _state.value = NearbyUiState(phase = NearbyPhase.VISIBLE, startedAt = System.currentTimeMillis())
         client.startAdvertising(name, SERVICE_ID, lifecycle, AdvertisingOptions.Builder().setStrategy(strategy).build())
             .addOnFailureListener { fail("Görünür olunamadı: ${it.readable()}") }
     }
 
     fun startSending(books: List<BookEntity>, withNotes: Boolean, name: String) {
+        runCatching { client.stopAllEndpoints() }
+        runCatching { client.stopAdvertising() }
+        runCatching { client.stopDiscovery() }
         reset()
         myName = name
         outgoing = books
         includeNotes = withNotes
-        _state.value = NearbyUiState(phase = NearbyPhase.SEARCHING, items = books.map { TransferItem(it.title, total = it.fileSize) })
+        _state.value = NearbyUiState(
+            phase = NearbyPhase.SEARCHING,
+            items = books.map { TransferItem(it.title, total = it.fileSize) },
+            startedAt = System.currentTimeMillis(),
+        )
         client.startDiscovery(SERVICE_ID, discovery, DiscoveryOptions.Builder().setStrategy(strategy).build())
             .addOnFailureListener { fail("Yakındaki cihazlar aranamadı: ${it.readable()}") }
     }
@@ -185,7 +200,17 @@ class NearbyShareManager(
         _state.update { it.copy(phase = NearbyPhase.FAILED, message = message) }
     }
 
-    private fun Exception.readable(): String = message?.substringAfter(": ")?.take(120) ?: javaClass.simpleName
+    private fun Exception.readable(): String {
+        val code = (this as? ApiException)?.statusCode ?: return message?.take(120) ?: javaClass.simpleName
+        val name = ConnectionsStatusCodes.getStatusCodeString(code)
+        val hint = when {
+            "MISSING_PERMISSION" in name -> "izin eksik"
+            "BLUETOOTH" in name || "RADIO" in name -> "Bluetooth/Wi-Fi kapalı ya da kullanılamıyor; açıp kapatmayı dene"
+            "ALREADY_IN_USE" in name -> "yakındaki paylaşım başka bir uygulamada kullanılıyor"
+            else -> null
+        }
+        return listOfNotNull(hint, "$name ($code)").joinToString(" · ")
+    }
 
     // ------------------------------------------------------------------ Keşif ve bağlantı
 

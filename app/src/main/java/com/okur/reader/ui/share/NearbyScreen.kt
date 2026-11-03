@@ -35,6 +35,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -58,6 +59,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -77,11 +79,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.okur.reader.AppContainer
 import com.okur.reader.data.AppPrefs
 import com.okur.reader.data.db.BookEntity
+import com.okur.reader.share.NearbyDiagnostics
 import com.okur.reader.share.NearbyPermissions
 import com.okur.reader.share.NearbyPhase
 import com.okur.reader.share.NearbyUiState
 import com.okur.reader.share.TransferItem
 import com.okur.reader.ui.common.BookCover
+import kotlinx.coroutines.delay
 
 fun deviceDisplayName(prefs: AppPrefs): String =
     prefs.deviceName.ifBlank { "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${Build.MODEL}".trim() }
@@ -253,6 +257,7 @@ private fun SendContent(state: NearbyUiState, onConnect: (com.okur.reader.share.
     Column(Modifier.fillMaxSize().padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         when (state.phase) {
             NearbyPhase.SEARCHING -> {
+                Diagnostics()
                 Radar()
                 Text(
                     "Yakındaki Okur kullanıcıları aranıyor…\nKarşı taraf Okur'da Kitaplık → ⇄ → \"Kitap al\" ekranını açmalı.",
@@ -260,6 +265,7 @@ private fun SendContent(state: NearbyUiState, onConnect: (com.okur.reader.share.
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (state.devices.isEmpty()) SlowHints(state.startedAt, sending = true)
                 state.devices.forEach { d ->
                     Card(
                         onClick = { onConnect(d) },
@@ -300,6 +306,7 @@ private fun ReceiveContent(state: NearbyUiState, myName: String, onOpenBook: (St
     Column(Modifier.fillMaxSize().padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         when (state.phase) {
             NearbyPhase.VISIBLE, NearbyPhase.AWAITING_ACCEPT, NearbyPhase.IDLE -> {
+                Diagnostics()
                 Radar()
                 Text("Görünürsün: $myName", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                 Text(
@@ -308,6 +315,7 @@ private fun ReceiveContent(state: NearbyUiState, myName: String, onOpenBook: (St
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                SlowHints(state.startedAt, sending = false)
             }
             NearbyPhase.CONNECTING -> {
                 Text("${state.peerName ?: "Cihaz"} ile bağlanılıyor…", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
@@ -330,6 +338,7 @@ private fun TransferList(state: NearbyUiState, onOpenBook: ((String) -> Unit)?) 
     }
     Text(title, style = MaterialTheme.typography.titleLarge)
     state.message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    if (state.phase == NearbyPhase.FAILED) Diagnostics()
     state.items.forEach { item -> TransferRow(item, onOpenBook) }
 }
 
@@ -364,6 +373,88 @@ private fun TransferRow(item: TransferItem, onOpenBook: ((String) -> Unit)?) {
                     TextButton(onClick = { onOpenBook(item.bookId) }) { Text("Aç") }
                 }
             }
+        }
+    }
+}
+
+/** Bluetooth, Wi-Fi, konum vb. durumunu gösterir; sorun varsa düzeltme düğmesi sunar. Ekran açıkken yenilenir. */
+@Composable
+private fun Diagnostics() {
+    val context = LocalContext.current
+    var items by remember { mutableStateOf(NearbyDiagnostics.check(context)) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1_500)
+            items = NearbyDiagnostics.check(context)
+        }
+    }
+    val problems = items.filter { !it.ok }
+    if (problems.isEmpty()) {
+        Text(
+            "✓ " + items.joinToString(" · ") { it.label },
+            style = MaterialTheme.typography.labelMedium,
+            color = Color(0xFF3FA66B),
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Center,
+        )
+        return
+    }
+    Card(
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Cihazların birbirini bulması için:", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onErrorContainer)
+            problems.forEach { item ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        if (item.required) Icons.Filled.Error else Icons.Filled.Warning, null,
+                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(item.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onErrorContainer)
+                        Text(item.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
+                    }
+                    if (item.fix != null) {
+                        TextButton(onClick = {
+                            runCatching { context.startActivity(item.fix.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                        }) { Text(item.fixLabel ?: "Düzelt") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Uzun süre kimse bulunamazsa olası çözümleri gösterir. */
+@Composable
+private fun SlowHints(startedAt: Long, sending: Boolean) {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(startedAt) {
+        while (true) {
+            delay(1_000)
+            now = System.currentTimeMillis()
+        }
+    }
+    if (startedAt == 0L || now - startedAt < 15_000) return
+    Card(
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(if (sending) "Henüz kimse bulunamadı" else "Henüz kimse bağlanmadı", style = MaterialTheme.typography.titleSmall)
+            listOf(
+                if (sending) "Karşı cihazda Okur açık ve \"Kitap al\" ekranında olmalı." else "Karşı cihaz \"Yakındaki Okur'a gönder\" ekranında olmalı.",
+                "İki cihazda da Bluetooth, Wi-Fi ve konum servisi açık olsun; ekranlar açık kalsın.",
+                "Cihazları birbirine yaklaştır (1–2 metre).",
+                "Olmazsa rolleri değiştirip dene: tablet gönderen, telefon alan olsun.",
+                "İki cihazı aynı Wi-Fi ağına bağlamak bulmayı kolaylaştırır.",
+                "İki cihazda da Okur'un son sürümü kurulu olmalı.",
+            ).forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
         }
     }
 }
