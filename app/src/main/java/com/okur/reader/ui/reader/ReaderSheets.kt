@@ -104,6 +104,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.okur.reader.ui.common.ChoiceSegments
 import com.okur.reader.data.EyePrefs
 import com.okur.reader.data.FontChoice
 import com.okur.reader.data.FilterMode
@@ -248,26 +249,14 @@ fun AppearanceSheet(
 
             SectionTitle("Sayfa düzeni")
             val mode = if (isPdf) prefs.pdfPageMode else prefs.pageMode
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                PageMode.entries.forEachIndexed { i, m ->
-                    SegmentedButton(
-                        selected = mode == m,
-                        onClick = { onPrefs { if (isPdf) it.copy(pdfPageMode = m) else it.copy(pageMode = m) } },
-                        shape = SegmentedButtonDefaults.itemShape(i, PageMode.entries.size),
-                    ) { Text(m.label) }
-                }
+            ChoiceSegments(PageMode.entries, mode, { it.label }, Modifier.fillMaxWidth()) { m ->
+                onPrefs { if (isPdf) it.copy(pdfPageMode = m) else it.copy(pageMode = m) }
             }
             AnimatedVisibility(mode == PageMode.PAGED) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Sayfa çevirme animasyonu", style = MaterialTheme.typography.bodyMedium)
-                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                        PageTurn.entries.forEachIndexed { i, t ->
-                            SegmentedButton(
-                                selected = prefs.pageTurn == t,
-                                onClick = { onPrefs { it.copy(pageTurn = t) } },
-                                shape = SegmentedButtonDefaults.itemShape(i, PageTurn.entries.size),
-                            ) { Text(t.label) }
-                        }
+                    ChoiceSegments(PageTurn.entries, prefs.pageTurn, { it.label }, Modifier.fillMaxWidth()) { t ->
+                        onPrefs { it.copy(pageTurn = t) }
                     }
                 }
             }

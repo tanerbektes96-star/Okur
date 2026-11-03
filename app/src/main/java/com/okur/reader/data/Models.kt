@@ -40,11 +40,11 @@ enum class FontChoice(val label: String, val css: String?) {
 enum class PageMode(val label: String) { PAGED("Sayfa çevirme"), SCROLL("Kaydırma") }
 
 /** Sayfa çevirme animasyonu */
-enum class PageTurn(val label: String) { CURL("Kıvrılma"), SLIDE("Kaydırma"), NONE("Animasyonsuz") }
+enum class PageTurn(val label: String) { CURL("Kıvrılma"), SLIDE("Kaydırma"), NONE("Yok") }
 
 enum class ThemeMode(val label: String) { SYSTEM("Sistem"), LIGHT("Açık"), DARK("Koyu") }
 
-enum class FilterMode(val label: String) { OFF("Kapalı"), ON("Her zaman"), SCHEDULE("Zamanlanmış") }
+enum class FilterMode(val label: String) { OFF("Kapalı"), ON("Her zaman"), SCHEDULE("Zamanlı") }
 
 enum class OrientationLock(val label: String) { AUTO("Otomatik"), PORTRAIT("Dikey"), LANDSCAPE("Yatay") }
 

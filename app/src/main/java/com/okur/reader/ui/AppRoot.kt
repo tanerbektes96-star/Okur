@@ -8,6 +8,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -191,7 +192,10 @@ private fun MainScaffold(
                 }
             },
         ) { padding ->
-            content(Modifier.fillMaxSize().padding(bottom = padding.calculateBottomPadding()).consumeWindowInsets(padding))
+            // Yalnızca alt çubuğun boşluğu tüketilir; durum çubuğu boşluğu ekranların
+            // kendi üst çubuklarına kalmalı, yoksa telefonda butonlar durum çubuğunun altına kayar.
+            val bottomOnly = PaddingValues(bottom = padding.calculateBottomPadding())
+            content(Modifier.fillMaxSize().padding(bottomOnly).consumeWindowInsets(bottomOnly))
         }
     }
 }

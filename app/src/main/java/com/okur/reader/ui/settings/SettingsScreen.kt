@@ -44,6 +44,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.okur.reader.ui.common.ChoiceSegments
 import com.okur.reader.AppContainer
 import com.okur.reader.data.AppPrefs
 import com.okur.reader.data.OrientationLock
@@ -94,14 +95,8 @@ fun SettingsScreen(container: AppContainer) {
         ) {
             SettingsGroup("Uygulama görünümü") {
                 SettingRow(Icons.Filled.WbSunny, "Tema")
-                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-                    ThemeMode.entries.forEachIndexed { i, m ->
-                        SegmentedButton(
-                            selected = app.themeMode == m,
-                            onClick = { updateApp { it.copy(themeMode = m) } },
-                            shape = SegmentedButtonDefaults.itemShape(i, ThemeMode.entries.size),
-                        ) { Text(m.label) }
-                    }
+                ChoiceSegments(ThemeMode.entries, app.themeMode, { it.label }, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) { m ->
+                    updateApp { it.copy(themeMode = m) }
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     SettingSwitch(Icons.Filled.Palette, "Dinamik renkler", "Duvar kağıdına uygun Material You renkleri", app.dynamicColor) { v -> updateApp { it.copy(dynamicColor = v) } }
@@ -113,14 +108,8 @@ fun SettingsScreen(container: AppContainer) {
                 SettingSwitch(Icons.Filled.TouchApp, "Kenarlara dokunarak sayfa çevir", "Sol/sağ kenar: önceki/sonraki, orta: menü", reader.tapZones) { v -> updateReader { it.copy(tapZones = v) } }
                 SettingSwitch(Icons.Filled.Lock, "Okurken ekranı açık tut", null, reader.keepScreenOn) { v -> updateReader { it.copy(keepScreenOn = v) } }
                 SettingRow(Icons.Filled.ScreenRotation, "Ekran yönü (okuma)")
-                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-                    OrientationLock.entries.forEachIndexed { i, o ->
-                        SegmentedButton(
-                            selected = reader.orientation == o,
-                            onClick = { updateReader { it.copy(orientation = o) } },
-                            shape = SegmentedButtonDefaults.itemShape(i, OrientationLock.entries.size),
-                        ) { Text(o.label) }
-                    }
+                ChoiceSegments(OrientationLock.entries, reader.orientation, { it.label }, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) { o ->
+                    updateReader { it.copy(orientation = o) }
                 }
             }
 

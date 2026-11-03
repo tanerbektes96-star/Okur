@@ -74,6 +74,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.okur.reader.ui.common.ChoiceSegments
 import com.okur.reader.AppContainer
 import com.okur.reader.data.EyePrefs
 import com.okur.reader.data.FilterMode
@@ -167,14 +168,8 @@ fun EyeCareScreen(container: AppContainer) {
             // ---- Mavi ışık filtresi ----
             SettingsGroup("Mavi ışık filtresi") {
                 Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                        FilterMode.entries.forEachIndexed { i, m ->
-                            SegmentedButton(
-                                selected = eye.filterMode == m,
-                                onClick = { update { it.copy(filterMode = m) } },
-                                shape = SegmentedButtonDefaults.itemShape(i, FilterMode.entries.size),
-                            ) { Text(m.label) }
-                        }
+                    ChoiceSegments(FilterMode.entries, eye.filterMode, { it.label }, Modifier.fillMaxWidth()) { m ->
+                        update { it.copy(filterMode = m) }
                     }
                     LabeledSlider("Yoğunluk", "%${(eye.filterStrength / 0.8f * 100).roundToInt()}", eye.filterStrength, 0.05f..0.8f) { v -> update { it.copy(filterStrength = v) } }
                     if (eye.filterMode == FilterMode.SCHEDULE) {
